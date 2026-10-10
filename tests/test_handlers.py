@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import ReplyKeyboardMarkup
 
 from walt_price_bot.handlers import _callback_message, handle_start, owner_required
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
@@ -25,6 +26,8 @@ async def test_first_start_claims_owner_and_greets(tmp_path: Path) -> None:
 
     assert await repository.get_owner_id() == ADMIN_TELEGRAM_ID
     assert "Walt P2P" in message.answer.await_args.args[0]
+    assert isinstance(message.answer.await_args.kwargs["reply_markup"], ReplyKeyboardMarkup)
+    assert message.answer.await_args.kwargs["reply_markup"].is_persistent is True
     assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 77
 
 

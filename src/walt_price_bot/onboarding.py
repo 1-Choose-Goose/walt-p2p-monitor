@@ -18,7 +18,11 @@ from pydantic import SecretStr
 
 from .access import AccessRequirement
 from .credentials import CredentialCipher
-from .keyboards import phone_request_keyboard, remove_reply_keyboard
+from .keyboards import (
+    main_navigation_keyboard,
+    phone_request_keyboard,
+    remove_reply_keyboard,
+)
 from .messaging import DeleteIncomingMessagesMiddleware
 from .models import AccessStatus, AssetCatalogEntry
 from .repository import ADMIN_TELEGRAM_ID, Repository
@@ -132,7 +136,13 @@ async def process_token_message(
     finally:
         await message.delete()
     if result.status is TokenValidationStatus.VALID:
-        await message.answer("✅ Токен Walt сохранён. Доступ к функциям открыт.")
+        user = await repository.get_user(telegram_id)
+        if user is None:
+            raise RuntimeError("activated user disappeared from the repository")
+        await message.answer(
+            "✅ Токен Walt сохранён. Доступ к функциям открыт.",
+            reply_markup=main_navigation_keyboard(user.role),
+        )
     elif result.status is TokenValidationStatus.INVALID:
         await message.answer("❌ Токен Walt не принят. Проверьте его и попробуйте снова.")
     else:
@@ -171,13 +181,9 @@ def build_onboarding_router(
         if user is not None:
             await state.clear()
         if user and user.status is AccessStatus.ACTIVE:
-            from .ui import main_menu_keyboard
-
             await message.answer(
                 WELCOME,
-                reply_markup=main_menu_keyboard(
-                    user.role, await repository.is_paused(user.telegram_id)
-                ),
+                reply_markup=main_navigation_keyboard(user.role),
             )
             return
         if user and user.status is AccessStatus.PENDING:

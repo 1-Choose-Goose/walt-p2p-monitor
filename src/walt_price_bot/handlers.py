@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from .keyboards import NOTIFICATIONS_BUTTON, PRICES_BUTTON, main_navigation_keyboard
 from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import (
     AccessStatus,
@@ -101,9 +102,7 @@ async def handle_start(message: Message | Any, repository: Repository) -> None:
         message,
         repository,
         WELCOME,
-        reply_markup=main_menu_keyboard(
-            account.role, await repository.is_paused(account.telegram_id)
-        ),
+        reply_markup=main_navigation_keyboard(account.role),
     )
 
 
@@ -158,6 +157,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if await owner_required(message, repository):
             await replace_message(message, repository, HELP, reply_markup=main_menu_keyboard())
 
+    @router.message(F.text == PRICES_BUTTON)
     @router.message(Command("price"))
     async def price_command(message: Message) -> None:
         if not await owner_required(message, repository):
@@ -178,6 +178,18 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             format_market_summary(snapshots),
             reply_markup=main_menu_keyboard(),
         )
+
+    @router.message(F.text == NOTIFICATIONS_BUTTON)
+    async def notifications_button(message: Message) -> None:
+        if await owner_required(message, repository):
+            await replace_message(
+                message,
+                repository,
+                "🔔 <b>Уведомления</b>\n\nВыберите, что настроить.",
+                reply_markup=notifications_menu_keyboard(
+                    await repository.is_paused(message.from_user.id)
+                ),
+            )
 
     @router.message(Command("alerts"))
     async def alerts_command(message: Message) -> None:

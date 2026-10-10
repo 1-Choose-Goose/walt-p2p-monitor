@@ -2,7 +2,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.fsm.context import FSMContext
@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .access import AccessRequirement
+from .keyboards import SETTINGS_BUTTON
 from .messaging import DeleteIncomingMessagesMiddleware
 from .models import Asset, QuoteSide, UserPreferences
 from .repository import Repository
@@ -229,6 +230,9 @@ def build_preferences_router(repository: Repository) -> Router:
         else:
             await event.answer(text, reply_markup=markup)
 
+    @router.message(
+        F.text == SETTINGS_BUTTON, flags={"access": AccessRequirement.ACTIVE}
+    )
     @router.message(Command("settings"), flags={"access": AccessRequirement.ACTIVE})
     async def settings(message: Message) -> None:
         await show_settings(message)

@@ -9,6 +9,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .access import AccessRequirement
+from .keyboards import ADMIN_BUTTON
 from .messaging import DeleteIncomingMessagesMiddleware
 from .models import AccessStatus, User, UserRole
 from .repository import ADMIN_TELEGRAM_ID, InvalidUserTransitionError, Repository
@@ -202,6 +203,7 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
     router = Router(name="admin")
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
+    @router.message(F.text == ADMIN_BUTTON, flags={"access": AccessRequirement.ADMIN})
     @router.message(Command("admin"), flags={"access": AccessRequirement.ADMIN})
     async def admin_panel(message: Message) -> None:
         users = [
