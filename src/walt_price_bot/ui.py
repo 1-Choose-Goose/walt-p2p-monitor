@@ -5,7 +5,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, ScheduleRule
 
-WALT_URL = "https://t.me/walt"
+WALT_P2P_URL = "https://t.me/walt/start?startapp=p2p"
 PAYMENT_NAMES = {
     "akbarsbank": "Ак Барс Банк",
     "alfabank": "Альфа-Банк",
@@ -191,7 +191,7 @@ def _offer_details(ad: P2PAd) -> str:
     return (
         f"   {nickname} · {_money(ad.min_amount)}–{_money(ad.max_amount)} ₽\n"
         f"   {payments or 'способ оплаты не указан'}\n"
-        f'   🔗 <a href="{WALT_URL}">Открыть Walt</a> · Объявление №{ad_number}'
+        f'   🔗 <a href="{WALT_P2P_URL}">Открыть P2P-маркет</a> · Объявление №{ad_number}'
     )
 
 

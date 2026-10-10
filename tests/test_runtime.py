@@ -119,7 +119,7 @@ async def test_monitor_uses_one_snapshot_for_multiple_rules_and_commits_success(
     assert provider.calls == 1
     assert len(sender.messages) == 2
     assert all("ниже или равно" in text for _, text in sender.messages)
-    assert all('href="https://t.me/walt"' in text for _, text in sender.messages)
+    assert all('href="https://t.me/walt/start?startapp=p2p"' in text for _, text in sender.messages)
     assert all(rule.armed is False for rule in await repository.list_alerts())
 
 

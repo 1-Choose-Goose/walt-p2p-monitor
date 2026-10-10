@@ -43,7 +43,8 @@ def test_market_summary_shows_ruble_buy_sell_and_offer_details() -> None:
     assert "1 000–50 000 ₽" in text
     assert "Сбербанк, Т-Банк" in text
     assert "Trader" in text
-    assert 'href="https://t.me/walt"' in text
+    assert 'href="https://t.me/walt/start?startapp=p2p"' in text
+    assert "Открыть P2P-маркет" in text
     assert "Объявление №A1B2C3" in text
 
 
