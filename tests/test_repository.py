@@ -13,21 +13,21 @@ from walt_price_bot.models import (
     ScheduleKind,
     ThresholdDirection,
 )
-from walt_price_bot.repository import Repository
+from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 
 
 @pytest.mark.asyncio
-async def test_first_owner_claim_is_atomic(tmp_path: Path) -> None:
+async def test_owner_is_fixed_administrator(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
 
     results = await asyncio.gather(
         repository.claim_owner(101),
-        repository.claim_owner(202),
+        repository.claim_owner(ADMIN_TELEGRAM_ID),
     )
 
     assert sorted(results) == [False, True]
-    assert await repository.get_owner_id() in {101, 202}
+    assert await repository.get_owner_id() == ADMIN_TELEGRAM_ID
 
 
 @pytest.mark.asyncio
@@ -35,9 +35,9 @@ async def test_repository_persists_pause_and_alerts(tmp_path: Path) -> None:
     database = tmp_path / "bot.db"
     repository = Repository(database)
     await repository.initialize()
-    await repository.claim_owner(101)
-    await repository.set_paused(True)
+    await repository.set_paused(ADMIN_TELEGRAM_ID, True)
     alert_id = await repository.add_alert(
+        ADMIN_TELEGRAM_ID,
         kind=AlertKind.THRESHOLD,
         asset=Asset.USDT,
         quote_side=QuoteSide.BUY,
@@ -48,8 +48,8 @@ async def test_repository_persists_pause_and_alerts(tmp_path: Path) -> None:
     reopened = Repository(database)
     await reopened.initialize()
 
-    assert await reopened.is_paused() is True
-    alerts = await reopened.list_alerts()
+    assert await reopened.is_paused(ADMIN_TELEGRAM_ID) is True
+    alerts = await reopened.list_alerts(ADMIN_TELEGRAM_ID)
     assert [alert.id for alert in alerts] == [alert_id]
     assert alerts[0].target == "90.50"
 
@@ -60,11 +60,11 @@ async def test_repository_persists_last_bot_message_for_chat_cleanup(tmp_path: P
     repository = Repository(database)
     await repository.initialize()
 
-    await repository.set_last_message_id(321)
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 321)
 
     reopened = Repository(database)
     await reopened.initialize()
-    assert await reopened.get_last_message_id() == 321
+    assert await reopened.get_last_message_id(ADMIN_TELEGRAM_ID) == 321
 
 
 @pytest.mark.asyncio
@@ -73,6 +73,7 @@ async def test_repository_accepts_bitcoin_alerts(tmp_path: Path) -> None:
     await repository.initialize()
 
     alert_id = await repository.add_alert(
+        ADMIN_TELEGRAM_ID,
         kind=AlertKind.THRESHOLD,
         asset=Asset.BTC,
         quote_side=QuoteSide.BUY,
@@ -80,7 +81,7 @@ async def test_repository_accepts_bitcoin_alerts(tmp_path: Path) -> None:
         target="7000000",
     )
 
-    assert (await repository.list_alerts())[0].id == alert_id
+    assert (await repository.list_alerts(ADMIN_TELEGRAM_ID))[0].id == alert_id
 
 
 @pytest.mark.asyncio
@@ -113,6 +114,7 @@ async def test_repository_migrates_existing_alert_table_for_bitcoin(tmp_path: Pa
     repository = Repository(database)
     await repository.initialize()
     await repository.add_alert(
+        ADMIN_TELEGRAM_ID,
         kind=AlertKind.THRESHOLD,
         asset=Asset.BTC,
         quote_side=QuoteSide.BUY,
@@ -120,7 +122,9 @@ async def test_repository_migrates_existing_alert_table_for_bitcoin(tmp_path: Pa
         target="7000000",
     )
 
-    assert [alert.asset for alert in await repository.list_alerts()] == [Asset.USDT, Asset.BTC]
+    assert [
+        alert.asset for alert in await repository.list_alerts(ADMIN_TELEGRAM_ID)
+    ] == [Asset.USDT, Asset.BTC]
 
 
 @pytest.mark.asyncio
@@ -129,25 +133,26 @@ async def test_opportunity_notifications_are_opt_in_and_persist_settings(tmp_pat
     repository = Repository(database)
     await repository.initialize()
 
-    defaults = await repository.get_opportunity_settings()
+    defaults = await repository.get_opportunity_settings(ADMIN_TELEGRAM_ID)
     assert defaults.enabled is False
     assert defaults.mode is OpportunityMode.BOTH
     assert defaults.min_spread_percent == Decimal("2")
 
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BUY,
         min_spread_percent=Decimal("1.5"),
     )
 
     reopened = Repository(database)
     await reopened.initialize()
-    configured = await reopened.get_opportunity_settings()
+    configured = await reopened.get_opportunity_settings(ADMIN_TELEGRAM_ID)
     assert configured.enabled is True
     assert configured.mode is OpportunityMode.BUY
     assert configured.min_spread_percent == Decimal("1.5")
 
-    await reopened.disable_opportunities()
-    assert (await reopened.get_opportunity_settings()).enabled is False
+    await reopened.disable_opportunities(ADMIN_TELEGRAM_ID)
+    assert (await reopened.get_opportunity_settings(ADMIN_TELEGRAM_ID)).enabled is False
 
 
 @pytest.mark.asyncio
@@ -155,7 +160,9 @@ async def test_opportunity_deduplication_is_per_asset_and_side(tmp_path: Path) -
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
 
-    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.BUY) is None
+    assert await repository.get_last_opportunity_ad(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY
+    ) is None
 
 
 @pytest.mark.asyncio
@@ -163,17 +170,21 @@ async def test_opportunity_history_persists_all_ads_across_restart(tmp_path: Pat
     database = tmp_path / "bot.db"
     repository = Repository(database)
     await repository.initialize()
-    await repository.mark_opportunity_notified(Asset.USDT, QuoteSide.BUY, "offer-a")
-    await repository.mark_opportunity_notified(Asset.USDT, QuoteSide.BUY, "offer-b")
+    await repository.mark_opportunity_notified(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-a"
+    )
+    await repository.mark_opportunity_notified(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-b"
+    )
 
     reopened = Repository(database)
     await reopened.initialize()
 
     assert await reopened.was_opportunity_notified(
-        Asset.USDT, QuoteSide.BUY, "offer-a"
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-a"
     ) is True
     assert await reopened.was_opportunity_notified(
-        Asset.USDT, QuoteSide.BUY, "offer-b"
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-b"
     ) is True
 
 
@@ -181,8 +192,6 @@ async def test_opportunity_history_persists_all_ads_across_restart(tmp_path: Pat
 async def test_configured_owner_conflict_is_not_silent(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    await repository.claim_owner(101)
-
     with pytest.raises(RuntimeError, match="owner"):
         await repository.set_configured_owner(202)
 
@@ -237,14 +246,16 @@ async def test_old_database_migration_preserves_user_data(tmp_path: Path) -> Non
     await repository.initialize()
     await repository.initialize()
 
-    assert await repository.get_owner_id() == 101
-    assert await repository.is_paused() is True
-    assert [rule.target for rule in await repository.list_alerts()] == ["90"]
-    assert (await repository.list_schedules())[0].last_sent_at == (
+    assert await repository.get_owner_id() == ADMIN_TELEGRAM_ID
+    assert await repository.is_paused(ADMIN_TELEGRAM_ID) is True
+    assert [rule.target for rule in await repository.list_alerts(ADMIN_TELEGRAM_ID)] == [
+        "90"
+    ]
+    assert (await repository.list_schedules(ADMIN_TELEGRAM_ID))[0].last_sent_at == (
         "2026-10-10T08:00:00+00:00"
     )
     assert await repository.was_opportunity_notified(
-        Asset.USDT, QuoteSide.BUY, "offer-a"
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-a"
     ) is True
 
 
@@ -254,25 +265,41 @@ async def test_schedule_state_persists_after_restart(tmp_path: Path) -> None:
     repository = Repository(database)
     await repository.initialize()
     schedule_id = await repository.add_schedule(
+        ADMIN_TELEGRAM_ID,
         kind=ScheduleKind.DAILY, daily_time="09:30"
     )
-    await repository.mark_schedule_sent(schedule_id, "2026-10-10T04:30:00+00:00")
+    await repository.mark_schedule_sent(
+        ADMIN_TELEGRAM_ID, schedule_id, "2026-10-10T04:30:00+00:00"
+    )
 
     reopened = Repository(database)
     await reopened.initialize()
 
-    schedule = (await reopened.list_schedules())[0]
+    schedule = (await reopened.list_schedules(ADMIN_TELEGRAM_ID))[0]
     assert schedule.daily_time == "09:30"
     assert schedule.last_sent_at == "2026-10-10T04:30:00+00:00"
-    await repository.mark_opportunity_notified(Asset.USDT, QuoteSide.BUY, "offer-1")
-    await repository.mark_opportunity_notified(Asset.BTC, QuoteSide.SELL, "offer-2")
+    await repository.mark_opportunity_notified(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-1"
+    )
+    await repository.mark_opportunity_notified(
+        ADMIN_TELEGRAM_ID, Asset.BTC, QuoteSide.SELL, "offer-2"
+    )
 
-    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.BUY) == "offer-1"
-    assert await repository.get_last_opportunity_ad(Asset.BTC, QuoteSide.SELL) == "offer-2"
-    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.SELL) is None
+    assert await repository.get_last_opportunity_ad(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY
+    ) == "offer-1"
+    assert await repository.get_last_opportunity_ad(
+        ADMIN_TELEGRAM_ID, Asset.BTC, QuoteSide.SELL
+    ) == "offer-2"
+    assert await repository.get_last_opportunity_ad(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.SELL
+    ) is None
 
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BOTH,
         min_spread_percent=Decimal("2"),
     )
-    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.BUY) is None
+    assert await repository.get_last_opportunity_ad(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY
+    ) is None
