@@ -7,11 +7,11 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .models import (
     AlertKind,
     AlertRule,
-    Asset,
     MarketSnapshot,
     OpportunityMode,
     OpportunitySettings,
     P2PAd,
+    SEED_ASSETS,
     ScheduleRule,
 )
 
@@ -96,7 +96,8 @@ def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
             )
         blocks.append("\n".join(lines))
     available = {snapshot.asset for snapshot in snapshots}
-    for asset in Asset:
+    for entry in SEED_ASSETS:
+        asset = entry.symbol
         if asset not in available:
             blocks.append(f"\n<b>{asset.value} / RUB</b>\nПодходящих онлайн-объявлений сейчас нет.")
     return "\n".join(blocks)
@@ -166,9 +167,11 @@ def asset_keyboard(prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="USDT", callback_data=f"{prefix}:asset:USDT"),
-                InlineKeyboardButton(text="TON", callback_data=f"{prefix}:asset:TON"),
-                InlineKeyboardButton(text="Биткоин", callback_data=f"{prefix}:asset:BTC"),
+                InlineKeyboardButton(
+                    text=entry.symbol.value,
+                    callback_data=f"{prefix}:asset:{entry.symbol.value}",
+                )
+                for entry in SEED_ASSETS
             ],
             _back_row(),
         ]

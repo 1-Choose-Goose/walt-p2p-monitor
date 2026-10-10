@@ -95,7 +95,8 @@ def test_market_summary_escapes_untrusted_walt_text() -> None:
 def test_market_summary_explains_when_filtered_offer_is_unavailable() -> None:
     text = format_market_summary([])
 
-    assert text.count("Подходящих онлайн-объявлений сейчас нет.") == 3
+    assert text.count("Подходящих онлайн-объявлений сейчас нет.") == 5
+    assert "GRAM / RUB" in text
     assert "BTC / RUB" in text
 
 
@@ -133,13 +134,15 @@ def test_main_menu_has_clear_russian_visual_actions() -> None:
     assert all(any("А" <= char <= "я" for char in button.text) for button in buttons)
 
 
-def test_asset_keyboard_includes_bitcoin_in_russian() -> None:
-    buttons = asset_keyboard("alert").inline_keyboard[0]
+def test_asset_keyboard_uses_current_walt_p2p_tickers() -> None:
+    buttons = [button for row in asset_keyboard("alert").inline_keyboard for button in row]
 
-    assert [(button.text, button.callback_data) for button in buttons] == [
+    assert [(button.text, button.callback_data) for button in buttons[:-1]] == [
+        ("GRAM", "alert:asset:GRAM"),
         ("USDT", "alert:asset:USDT"),
-        ("TON", "alert:asset:TON"),
-        ("Биткоин", "alert:asset:BTC"),
+        ("BTC", "alert:asset:BTC"),
+        ("NOT", "alert:asset:NOT"),
+        ("ETH", "alert:asset:ETH"),
     ]
 
 
