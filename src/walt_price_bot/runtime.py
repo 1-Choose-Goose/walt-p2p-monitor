@@ -8,9 +8,10 @@ from typing import Protocol
 from .alerts import evaluate_percent_change, evaluate_threshold
 from .market import MarketUnavailable, select_best_buy_offer, select_best_sell_offer
 from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, QuoteSide
+from .opportunities import mode_includes_side, opportunity_percent
 from .repository import Repository
 from .scheduling import schedule_is_due
-from .ui import _offer_details, format_market_summary
+from .ui import _money, _offer_details, format_market_summary
 from .walt import WaltClient
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,55 @@ async def run_monitor_cycle(
         except Exception as exc:
             logger.warning("Failed to process alert %s (%s)", rule.id, type(exc).__name__)
 
+    opportunity_settings = await repository.get_opportunity_settings()
+    if opportunity_settings.enabled:
+        opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
+        for snapshot in snapshots:
+            if snapshot.exchange_price is None:
+                continue
+            for side, offer in (
+                (QuoteSide.BUY, snapshot.buy),
+                (QuoteSide.SELL, snapshot.sell),
+            ):
+                if offer is None or not mode_includes_side(opportunity_settings.mode, side):
+                    continue
+                spread = opportunity_percent(
+                    side,
+                    p2p_price=offer.price,
+                    exchange_price=snapshot.exchange_price,
+                )
+                if spread < opportunity_settings.min_spread_percent:
+                    continue
+                if (
+                    await repository.get_last_opportunity_ad(snapshot.asset, side)
+                    == offer.id
+                ):
+                    continue
+                opportunities.append((snapshot, side, offer, spread))
+        if opportunities:
+            try:
+                await sender.send_message(
+                    owner_id,
+                    "\n\n".join(
+                        _opportunity_message(
+                            snapshot,
+                            side,
+                            offer,
+                            spread,
+                            opportunity_settings.min_spread_percent,
+                        )
+                        for snapshot, side, offer, spread in opportunities
+                    ),
+                )
+                for snapshot, side, offer, _ in opportunities:
+                    await repository.mark_opportunity_notified(
+                        snapshot.asset, side, offer.id
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to deliver opportunity summary (%s)", type(exc).__name__
+                )
+
     for schedule in await repository.list_schedules(enabled_only=True):
         if not schedule_is_due(schedule, now):
             continue
@@ -171,5 +221,25 @@ def _percent_message(
     return (
         f"📈 <b>{asset.value}: изменение {rendered_change}% {arrow}</b>\n"
         f"Текущая цена {action}: {offer.price} ₽\n"
+        f"{_offer_details(offer)}"
+    )
+
+
+def _opportunity_message(
+    snapshot: MarketSnapshot,
+    side: QuoteSide,
+    offer: P2PAd,
+    spread: Decimal,
+    threshold: Decimal,
+) -> str:
+    action = "покупка" if side is QuoteSide.BUY else "продажа"
+    return (
+        f"💎 <b>Расчётно выгодный лот: {action} {snapshot.asset.value}</b>\n"
+        f"Биржевой курс Coinbase: {_money(snapshot.exchange_price)} ₽\n"
+        f"Цена P2P: {_money(offer.price)} ₽\n"
+        f"Расчётная разница: +{str(spread).replace('.', ',')}%\n"
+        f"Ваш порог: {str(threshold).replace('.', ',')}%\n"
+        "⚠️ Это ориентир без учёта комиссии банка, проскальзывания и изменения цены; "
+        "он не гарантирует прибыль.\n"
         f"{_offer_details(offer)}"
     )

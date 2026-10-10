@@ -8,6 +8,7 @@ from walt_price_bot.models import (
     AlertKind,
     Asset,
     MarketSnapshot,
+    OpportunityMode,
     P2PAd,
     QuoteSide,
     ScheduleKind,
@@ -69,11 +70,13 @@ class FakeProvider:
                 asset=Asset.USDT,
                 buy=ad(Asset.USDT, QuoteSide.SELL, "89.00"),
                 sell=ad(Asset.USDT, QuoteSide.BUY, "91.00"),
+                exchange_price=Decimal("90.00"),
             ),
             MarketSnapshot(
                 asset=Asset.TON,
                 buy=ad(Asset.TON, QuoteSide.SELL, "125.00"),
                 sell=ad(Asset.TON, QuoteSide.BUY, "124.00"),
+                exchange_price=Decimal("124.00"),
             ),
         ]
 
@@ -201,3 +204,73 @@ async def test_schedule_is_marked_only_after_successful_delivery(tmp_path: Path)
     schedule = (await repository.list_schedules())[0]
     assert schedule.id == schedule_id
     assert schedule.last_sent_at == now.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_profitable_offer_notifies_selected_side_once(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    sender = FakeSender()
+    now = datetime.now(UTC)
+
+    await run_monitor_cycle(repository, FakeProvider(), sender, now)
+    await run_monitor_cycle(repository, FakeProvider(), sender, now)
+
+    assert len(sender.messages) == 1
+    text = sender.messages[0][1]
+    assert "Расчётно выгодный лот: покупка USDT" in text
+    assert "Биржевой курс Coinbase: 90 ₽" in text
+    assert "Цена P2P: 89 ₽" in text
+    assert "Расчётная разница: +1,11%" in text
+    assert "не гарантирует прибыль" in text
+    assert "Открыть объявление" in text
+
+
+@pytest.mark.asyncio
+async def test_opportunity_mode_filters_side_and_threshold(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.SELL,
+        min_spread_percent=Decimal("1"),
+    )
+    sender = FakeSender()
+
+    await run_monitor_cycle(repository, FakeProvider(), sender, datetime.now(UTC))
+
+    assert len(sender.messages) == 1
+    assert "Расчётно выгодный лот: продажа USDT" in sender.messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_failed_opportunity_send_is_retried(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    now = datetime.now(UTC)
+
+    await run_monitor_cycle(repository, FakeProvider(), FakeSender(fail=True), now)
+    sender = FakeSender()
+    await run_monitor_cycle(repository, FakeProvider(), sender, now)
+
+    assert len(sender.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_multiple_opportunities_are_delivered_in_one_message(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BOTH,
+        min_spread_percent=Decimal("1"),
+    )
+    sender = FakeSender()
+
+    await run_monitor_cycle(repository, FakeProvider(), sender, datetime.now(UTC))
+
+    assert len(sender.messages) == 1
+    assert "покупка USDT" in sender.messages[0][1]
+    assert "продажа USDT" in sender.messages[0][1]

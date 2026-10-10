@@ -1,6 +1,10 @@
 from decimal import Decimal
 
-from .models import QuoteSide
+from .models import OpportunityMode, QuoteSide
+
+
+def mode_includes_side(mode: OpportunityMode, side: QuoteSide) -> bool:
+    return mode is OpportunityMode.BOTH or mode.value == side.value
 
 
 def opportunity_percent(
