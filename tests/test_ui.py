@@ -38,6 +38,29 @@ def test_market_summary_shows_ruble_buy_sell_and_offer_details() -> None:
     assert "Trader" in text
 
 
+def test_market_summary_escapes_untrusted_walt_text() -> None:
+    unsafe = quote("sell-ad", QuoteSide.SELL, "89.50")
+    unsafe = P2PAd(
+        id=unsafe.id,
+        nickname="<b>fake</b>",
+        asset=unsafe.asset,
+        side=unsafe.side,
+        price=unsafe.price,
+        min_amount=unsafe.min_amount,
+        max_amount=unsafe.max_amount,
+        payments=("bank<script>",),
+        rating=unsafe.rating,
+        is_online=True,
+    )
+    snapshot = MarketSnapshot(asset=Asset.USDT, buy=unsafe, sell=unsafe)
+
+    text = format_market_summary([snapshot])
+
+    assert "&lt;b&gt;fake&lt;/b&gt;" in text
+    assert "bank&lt;script&gt;" in text
+    assert "<b>fake</b>" not in text
+
+
 @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "1e20", "abc"])
 def test_positive_decimal_rejects_invalid_input(value: str) -> None:
     with pytest.raises(ValueError):

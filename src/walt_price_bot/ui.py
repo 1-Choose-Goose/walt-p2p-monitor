@@ -1,8 +1,9 @@
 from decimal import Decimal, InvalidOperation
+from html import escape
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .models import AlertKind, AlertRule, MarketSnapshot, ScheduleRule
+from .models import AlertKind, AlertRule, MarketSnapshot, P2PAd, ScheduleRule
 
 
 def parse_positive_decimal(value: str, *, maximum: Decimal = Decimal("100")) -> Decimal:
@@ -131,10 +132,12 @@ def delete_keyboard(alerts: list[AlertRule], schedules: list[ScheduleRule]) -> I
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _offer_details(ad: object) -> str:
+def _offer_details(ad: P2PAd) -> str:
+    nickname = escape(ad.nickname)
+    payments = ", ".join(escape(payment) for payment in ad.payments)
     return (
-        f"   {ad.nickname} · {_money(ad.min_amount)}–{_money(ad.max_amount)} ₽\n"
-        f"   {', '.join(ad.payments) or 'способ оплаты не указан'}"
+        f"   {nickname} · {_money(ad.min_amount)}–{_money(ad.max_amount)} ₽\n"
+        f"   {payments or 'способ оплаты не указан'}"
     )
 
 
