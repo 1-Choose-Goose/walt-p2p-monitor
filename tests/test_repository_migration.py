@@ -91,7 +91,7 @@ async def test_v14_migration_is_complete_and_idempotent(tmp_path: Path) -> None:
     )
 
     with sqlite3.connect(database) as db:
-        assert db.execute("SELECT version FROM schema_meta").fetchone() == (2,)
+        assert db.execute("SELECT version FROM schema_meta").fetchone() == (3,)
         assert db.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
         columns = {row[1] for row in db.execute("PRAGMA table_info(user_credentials)")}
         assert "encrypted_token" in columns

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from walt_price_bot.models import (
+    SEED_ASSETS,
     AlertKind,
     Asset,
     MarketSnapshot,
@@ -15,7 +16,7 @@ from walt_price_bot.models import (
     ScheduleKind,
     ThresholdDirection,
 )
-from walt_price_bot.repository import Repository
+from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 from walt_price_bot.runtime import MarketService, run_monitor_cycle
 
 
@@ -41,23 +42,27 @@ class FakeWaltClient:
     def __init__(self) -> None:
         self.calls: list[tuple[Asset, QuoteSide]] = []
 
-    async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
-        self.calls.append((asset, side))
+    async def fetch_ads(self, asset, side: QuoteSide) -> list[P2PAd]:
+        symbol = getattr(asset, "symbol", asset)
+        self.calls.append((symbol, side))
         price = "90.00" if side is QuoteSide.SELL else "89.00"
-        return [ad(asset, side, price)]
+        return [ad(symbol, side, price)]
 
 
 class FakeExchangeClient:
     def __init__(self) -> None:
         self.calls: list[Asset] = []
 
-    async def fetch_rub_rate(self, asset: Asset) -> Decimal:
-        self.calls.append(asset)
+    async def fetch_rub_rate(self, asset) -> Decimal:
+        symbol = getattr(asset, "symbol", asset)
+        self.calls.append(symbol)
         return {
             Asset.USDT: Decimal("85.05"),
-            Asset.TON: Decimal("124.08"),
+            Asset.GRAM: Decimal("124.08"),
             Asset.BTC: Decimal("7047246.71"),
-        }[asset]
+            Asset.NOT: Decimal("0.15"),
+            Asset.ETH: Decimal("350000"),
+        }[symbol]
 
 
 class FailingExchangeClient:
@@ -71,8 +76,8 @@ class EmptyWaltClient:
 
 
 class PartiallyFailingWaltClient(FakeWaltClient):
-    async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
-        if asset is Asset.BTC:
+    async def fetch_ads(self, asset, side: QuoteSide) -> list[P2PAd]:
+        if getattr(asset, "symbol", asset) == Asset.BTC:
             raise RuntimeError("BTC unavailable")
         return await super().fetch_ads(asset, side)
 
@@ -118,20 +123,26 @@ async def test_market_service_fetches_each_market_once() -> None:
 
     snapshots = await MarketService(client, exchange_client).get_snapshots()
 
-    assert len(snapshots) == 3
+    assert len(snapshots) == 5
     assert set(client.calls) == {
         (Asset.USDT, QuoteSide.BUY),
         (Asset.USDT, QuoteSide.SELL),
-        (Asset.TON, QuoteSide.BUY),
-        (Asset.TON, QuoteSide.SELL),
+        (Asset.GRAM, QuoteSide.BUY),
+        (Asset.GRAM, QuoteSide.SELL),
         (Asset.BTC, QuoteSide.BUY),
         (Asset.BTC, QuoteSide.SELL),
+        (Asset.NOT, QuoteSide.BUY),
+        (Asset.NOT, QuoteSide.SELL),
+        (Asset.ETH, QuoteSide.BUY),
+        (Asset.ETH, QuoteSide.SELL),
     }
-    assert exchange_client.calls == list(Asset)
+    assert exchange_client.calls == [entry.symbol for entry in SEED_ASSETS]
     assert {snapshot.asset: snapshot.exchange_price for snapshot in snapshots} == {
         Asset.USDT: Decimal("85.05"),
-        Asset.TON: Decimal("124.08"),
+        Asset.GRAM: Decimal("124.08"),
         Asset.BTC: Decimal("7047246.71"),
+        Asset.NOT: Decimal("0.15"),
+        Asset.ETH: Decimal("350000"),
     }
 
 
@@ -139,7 +150,7 @@ async def test_market_service_fetches_each_market_once() -> None:
 async def test_market_service_keeps_exchange_rates_when_p2p_offers_are_unavailable() -> None:
     snapshots = await MarketService(EmptyWaltClient(), FakeExchangeClient()).get_snapshots()
 
-    assert len(snapshots) == 3
+    assert len(snapshots) == 5
     assert all(snapshot.buy is None and snapshot.sell is None for snapshot in snapshots)
     assert all(snapshot.exchange_price is not None for snapshot in snapshots)
 
@@ -152,7 +163,7 @@ async def test_market_service_isolates_one_asset_failure() -> None:
 
     by_asset = {snapshot.asset: snapshot for snapshot in snapshots}
     assert by_asset[Asset.USDT].buy is not None
-    assert by_asset[Asset.TON].sell is not None
+    assert by_asset[Asset.GRAM].sell is not None
     assert by_asset[Asset.BTC].buy is None
     assert by_asset[Asset.BTC].sell is None
     assert by_asset[Asset.BTC].exchange_price is not None
@@ -171,6 +182,7 @@ async def test_coinbase_failure_keeps_walt_without_opportunity_signal(
 
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BOTH,
         min_spread_percent=Decimal("0.5"),
     )
@@ -182,7 +194,6 @@ async def test_coinbase_failure_keeps_walt_without_opportunity_signal(
 async def prepared_repository(path: Path) -> Repository:
     repository = Repository(path)
     await repository.initialize()
-    await repository.claim_owner(101)
     return repository
 
 
@@ -193,6 +204,7 @@ async def test_monitor_uses_one_snapshot_for_multiple_rules_and_commits_success(
     repository = await prepared_repository(tmp_path / "bot.db")
     for target in ("90.00", "90.50"):
         await repository.add_alert(
+            ADMIN_TELEGRAM_ID,
             kind=AlertKind.THRESHOLD,
             asset=Asset.USDT,
             quote_side=QuoteSide.BUY,
@@ -211,13 +223,17 @@ async def test_monitor_uses_one_snapshot_for_multiple_rules_and_commits_success(
         'href="https://telegram.me/walt/start?startapp=v2-' in text
         for _, text in sender.messages
     )
-    assert all(rule.armed is False for rule in await repository.list_alerts())
+    assert all(
+        rule.armed is False
+        for rule in await repository.list_alerts(ADMIN_TELEGRAM_ID)
+    )
 
 
 @pytest.mark.asyncio
 async def test_failed_send_does_not_consume_alert(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.add_alert(
+        ADMIN_TELEGRAM_ID,
         kind=AlertKind.PERCENT,
         asset=Asset.USDT,
         quote_side=QuoteSide.SELL,
@@ -227,13 +243,13 @@ async def test_failed_send_does_not_consume_alert(tmp_path: Path) -> None:
 
     await run_monitor_cycle(repository, FakeProvider(), FakeSender(fail=True), datetime.now(UTC))
 
-    assert (await repository.list_alerts())[0].baseline == "89.00"
+    assert (await repository.list_alerts(ADMIN_TELEGRAM_ID))[0].baseline == "89.00"
 
 
 @pytest.mark.asyncio
 async def test_paused_monitor_does_not_fetch_market(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
-    await repository.set_paused(True)
+    await repository.set_paused(ADMIN_TELEGRAM_ID, True)
     provider = FakeProvider()
 
     await run_monitor_cycle(repository, provider, FakeSender(), datetime.now(UTC))
@@ -244,14 +260,16 @@ async def test_paused_monitor_does_not_fetch_market(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_schedule_is_marked_only_after_successful_delivery(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
-    schedule_id = await repository.add_schedule(kind=ScheduleKind.INTERVAL, interval_hours=1)
+    schedule_id = await repository.add_schedule(
+        ADMIN_TELEGRAM_ID, kind=ScheduleKind.INTERVAL, interval_hours=1
+    )
     now = datetime(2026, 10, 10, 8, 0, tzinfo=UTC)
 
     await run_monitor_cycle(repository, FakeProvider(), FakeSender(fail=True), now)
-    assert (await repository.list_schedules())[0].last_sent_at is None
+    assert (await repository.list_schedules(ADMIN_TELEGRAM_ID))[0].last_sent_at is None
 
     await run_monitor_cycle(repository, FakeProvider(), FakeSender(), now)
-    schedule = (await repository.list_schedules())[0]
+    schedule = (await repository.list_schedules(ADMIN_TELEGRAM_ID))[0]
     assert schedule.id == schedule_id
     assert schedule.last_sent_at == now.isoformat()
 
@@ -260,6 +278,7 @@ async def test_schedule_is_marked_only_after_successful_delivery(tmp_path: Path)
 async def test_profitable_offer_notifies_selected_side_once(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BUY,
         min_spread_percent=Decimal("1"),
     )
@@ -282,6 +301,7 @@ async def test_profitable_offer_notifies_selected_side_once(tmp_path: Path) -> N
 async def test_opportunity_mode_filters_side_and_threshold(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.SELL,
         min_spread_percent=Decimal("1"),
     )
@@ -297,6 +317,7 @@ async def test_opportunity_mode_filters_side_and_threshold(tmp_path: Path) -> No
 async def test_failed_opportunity_send_is_retried(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BUY,
         min_spread_percent=Decimal("1"),
     )
@@ -313,6 +334,7 @@ async def test_failed_opportunity_send_is_retried(tmp_path: Path) -> None:
 async def test_multiple_opportunities_are_delivered_in_one_message(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BOTH,
         min_spread_percent=Decimal("1"),
     )
@@ -329,6 +351,7 @@ async def test_multiple_opportunities_are_delivered_in_one_message(tmp_path: Pat
 async def test_opportunity_history_prevents_a_b_a_repeat(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BUY,
         min_spread_percent=Decimal("1"),
     )
@@ -367,6 +390,7 @@ async def test_opportunity_history_prevents_a_b_a_repeat(tmp_path: Path) -> None
 async def test_concurrent_cycles_send_opportunity_once(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BUY,
         min_spread_percent=Decimal("1"),
     )
@@ -385,6 +409,7 @@ async def test_concurrent_cycles_send_opportunity_once(tmp_path: Path) -> None:
 async def test_stale_snapshot_does_not_create_signal(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
         mode=OpportunityMode.BUY,
         min_spread_percent=Decimal("1"),
     )
