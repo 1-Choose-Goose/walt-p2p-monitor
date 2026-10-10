@@ -430,6 +430,13 @@ class Repository:
             "summary_enabled": int,
             "timezone": str,
             "show_exchange_rate": int,
+            "notify_threshold": int,
+            "notify_percent": int,
+            "notify_scheduled": int,
+            "notify_opportunity": int,
+            "quiet_enabled": int,
+            "quiet_start": str,
+            "quiet_end": str,
         }
         if not changes or any(name not in columns for name in changes):
             raise ValueError("unsupported preference field")
