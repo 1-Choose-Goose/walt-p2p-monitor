@@ -24,3 +24,9 @@ def test_environment_template_contains_only_placeholders() -> None:
     assert "replace-with-bot-token" in text
     assert "replace-with-walt-api-key" in text
     assert "p2p.walletbot.me" not in text
+
+
+def test_installer_force_reinstalls_updated_application_package() -> None:
+    text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+
+    assert "--force-reinstall --no-deps" in text

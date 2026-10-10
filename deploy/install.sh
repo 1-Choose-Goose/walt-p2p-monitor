@@ -28,7 +28,7 @@ python3 -m venv "${app_dir}/.venv"
 "${app_dir}/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
   --require-hashes -r "${app_dir}/requirements.lock"
 "${app_dir}/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
-  --no-deps "${app_dir}"
+  --force-reinstall --no-deps "${app_dir}"
 chown -R root:root "${app_dir}"
 chmod -R u=rwX,go=rX "${app_dir}"
 
