@@ -63,6 +63,10 @@ async def test_command_menu_includes_start_as_main_menu() -> None:
 
     assert bot.commands is not None
     assert (bot.commands[0].command, bot.commands[0].description) == ("start", "Главное меню")
+    assert any(
+        command.command == "deals" and command.description == "Выгодные лоты"
+        for command in bot.commands
+    )
 
 
 @pytest.mark.asyncio
@@ -75,6 +79,7 @@ async def test_bot_profile_has_russian_pre_start_greeting() -> None:
     assert bot.description is not None
     assert "USDT, TON и BTC" in bot.description
     assert "Coinbase" in bot.description
+    assert "выгодных" in bot.description.lower()
 
 
 @pytest.mark.asyncio

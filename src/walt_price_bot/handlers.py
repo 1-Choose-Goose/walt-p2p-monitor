@@ -12,6 +12,7 @@ from .models import (
     AlertKind,
     Asset,
     MarketSnapshot,
+    OpportunityMode,
     QuoteSide,
     ScheduleKind,
     ThresholdDirection,
@@ -23,8 +24,11 @@ from .ui import (
     delete_keyboard,
     direction_keyboard,
     format_market_summary,
+    format_opportunity_settings,
     format_rules,
     main_menu_keyboard,
+    opportunity_mode_keyboard,
+    opportunity_threshold_keyboard,
     parse_daily_time,
     parse_positive_decimal,
     schedule_keyboard,
@@ -37,6 +41,7 @@ WELCOME = (
     "Для покупки учитываю объявления с минимальным лимитом от 500 до 2 000 ₽.\n"
     "Оплата: СБП, Сбербанк или другой российский банк.\n"
     "Используйте /price, /alert, /change или /schedule.\n"
+    "/deals — автоуведомления о расчётно выгодных лотах.\n"
     "/start — вернуться в главное меню."
 )
 
@@ -44,6 +49,7 @@ HELP = (
     "<b>Команды</b>\n"
     "/start — главное меню\n"
     "/price — текущие цены\n"
+    "/deals — выгодные лоты относительно биржевого курса\n"
     "/alert — ценовой порог\n"
     "/change — изменение в процентах\n"
     "/schedule — регулярная сводка\n"
@@ -73,6 +79,11 @@ class ChangeFlow(StatesGroup):
 class ScheduleFlow(StatesGroup):
     kind = State()
     value = State()
+
+
+class OpportunityFlow(StatesGroup):
+    mode = State()
+    threshold = State()
 
 
 async def owner_required(event: Message | CallbackQuery | Any, repository: Repository) -> bool:
@@ -135,8 +146,23 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             await replace_message(
                 message,
                 repository,
-                format_rules(await repository.list_alerts(), await repository.list_schedules()),
+                format_rules(
+                    await repository.list_alerts(),
+                    await repository.list_schedules(),
+                    await repository.get_opportunity_settings(),
+                ),
                 reply_markup=main_menu_keyboard(),
+            )
+
+    @router.message(Command("deals"))
+    async def deals_command(message: Message, state: FSMContext) -> None:
+        if await owner_required(message, repository):
+            await state.set_state(OpportunityFlow.mode)
+            await replace_message(
+                message,
+                repository,
+                format_opportunity_settings(await repository.get_opportunity_settings()),
+                reply_markup=opportunity_mode_keyboard(),
             )
 
     @router.message(Command("pause"))
@@ -402,6 +428,63 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             await state.clear()
             await _callback_message(callback, WELCOME, main_menu_keyboard())
 
+    @router.callback_query(F.data == "menu:opportunity")
+    async def menu_opportunity(callback: CallbackQuery, state: FSMContext) -> None:
+        if await owner_required(callback, repository):
+            await state.set_state(OpportunityFlow.mode)
+            await _callback_message(
+                callback,
+                format_opportunity_settings(await repository.get_opportunity_settings()),
+                opportunity_mode_keyboard(),
+            )
+
+    @router.callback_query(
+        OpportunityFlow.mode, F.data.startswith("opportunity:mode:")
+    )
+    async def opportunity_mode(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await owner_required(callback, repository):
+            return
+        mode = OpportunityMode(callback.data.rsplit(":", 1)[1])
+        await state.update_data(opportunity_mode=mode.value)
+        await state.set_state(OpportunityFlow.threshold)
+        await _callback_message(
+            callback,
+            "Выберите минимальную расчётную разницу с биржевым курсом:",
+            opportunity_threshold_keyboard(),
+        )
+
+    @router.callback_query(
+        OpportunityFlow.threshold, F.data.startswith("opportunity:threshold:")
+    )
+    async def opportunity_threshold(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await owner_required(callback, repository):
+            return
+        value = Decimal(callback.data.rsplit(":", 1)[1])
+        data = await state.get_data()
+        await repository.configure_opportunities(
+            mode=OpportunityMode(data["opportunity_mode"]),
+            min_spread_percent=value,
+        )
+        await state.clear()
+        await _callback_message(
+            callback,
+            "✅ Автоуведомления настроены.\n\n"
+            + format_opportunity_settings(await repository.get_opportunity_settings()),
+            main_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data == "opportunity:disable")
+    async def opportunity_disable(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await owner_required(callback, repository):
+            return
+        await repository.disable_opportunities()
+        await state.clear()
+        await _callback_message(
+            callback,
+            "⛔ Автоуведомления о выгодных лотах отключены.",
+            main_menu_keyboard(),
+        )
+
     @router.callback_query(F.data == "menu:alert")
     async def menu_alert(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
@@ -425,7 +508,11 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if await owner_required(callback, repository):
             await _callback_message(
                 callback,
-                format_rules(await repository.list_alerts(), await repository.list_schedules()),
+                format_rules(
+                    await repository.list_alerts(),
+                    await repository.list_schedules(),
+                    await repository.get_opportunity_settings(),
+                ),
                 main_menu_keyboard(),
             )
 

@@ -2,13 +2,23 @@ from decimal import Decimal
 
 import pytest
 
-from walt_price_bot.models import Asset, MarketSnapshot, P2PAd, QuoteSide
+from walt_price_bot.models import (
+    Asset,
+    MarketSnapshot,
+    OpportunityMode,
+    OpportunitySettings,
+    P2PAd,
+    QuoteSide,
+)
 from walt_price_bot.ui import (
     asset_keyboard,
     delete_keyboard,
     direction_keyboard,
     format_market_summary,
+    format_opportunity_settings,
     main_menu_keyboard,
+    opportunity_mode_keyboard,
+    opportunity_threshold_keyboard,
     parse_daily_time,
     parse_positive_decimal,
     schedule_keyboard,
@@ -110,6 +120,7 @@ def test_main_menu_has_clear_russian_visual_actions() -> None:
 
     assert [button.callback_data for button in buttons] == [
         "menu:price",
+        "menu:opportunity",
         "menu:alert",
         "menu:change",
         "menu:schedule",
@@ -139,6 +150,8 @@ def test_flow_keyboards_have_back_to_main_menu_button() -> None:
         direction_keyboard(),
         schedule_keyboard(),
         delete_keyboard([], []),
+        opportunity_mode_keyboard(),
+        opportunity_threshold_keyboard(),
     ]
 
     for keyboard in keyboards:
@@ -147,6 +160,33 @@ def test_flow_keyboards_have_back_to_main_menu_button() -> None:
             button.text == "⬅️ Назад в меню" and button.callback_data == "menu:home"
             for button in buttons
         )
+
+
+def test_opportunity_controls_are_fully_russian_and_show_current_status() -> None:
+    settings = OpportunitySettings(
+        enabled=True,
+        mode=OpportunityMode.BOTH,
+        min_spread_percent=Decimal("2"),
+    )
+
+    text = format_opportunity_settings(settings)
+    mode_buttons = [
+        button for row in opportunity_mode_keyboard().inline_keyboard for button in row
+    ]
+    threshold_buttons = [
+        button for row in opportunity_threshold_keyboard().inline_keyboard for button in row
+    ]
+
+    assert "включены" in text
+    assert "покупка и продажа" in text
+    assert "2%" in text
+    assert {button.callback_data for button in mode_buttons} >= {
+        "opportunity:mode:BUY",
+        "opportunity:mode:SELL",
+        "opportunity:mode:BOTH",
+        "opportunity:disable",
+    }
+    assert any("рекомендуется" in button.text for button in threshold_buttons)
 
 
 @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "1e20", "abc"])

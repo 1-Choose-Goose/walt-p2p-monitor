@@ -4,7 +4,16 @@ from html import escape
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, ScheduleRule
+from .models import (
+    AlertKind,
+    AlertRule,
+    Asset,
+    MarketSnapshot,
+    OpportunityMode,
+    OpportunitySettings,
+    P2PAd,
+    ScheduleRule,
+)
 
 WALT_MINI_APP_URL = "https://telegram.me/walt/start?startapp="
 PAYMENT_NAMES = {
@@ -84,9 +93,13 @@ def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
     return "\n".join(blocks)
 
 
-def format_rules(alerts: list[AlertRule], schedules: list[ScheduleRule]) -> str:
+def format_rules(
+    alerts: list[AlertRule],
+    schedules: list[ScheduleRule],
+    opportunity: OpportunitySettings | None = None,
+) -> str:
     lines = ["🔔 <b>Активные правила</b>"]
-    if not alerts and not schedules:
+    if not alerts and not schedules and not (opportunity and opportunity.enabled):
         return "🔕 Активных правил пока нет."
     for rule in alerts:
         action = "покупка" if rule.quote_side.value == "BUY" else "продажа"
@@ -106,7 +119,39 @@ def format_rules(alerts: list[AlertRule], schedules: list[ScheduleRule]) -> str:
             else f"ежедневно в {rule.daily_time}"
         )
         lines.append(f"S{rule.id}: сводка {description}")
+    if opportunity and opportunity.enabled:
+        mode_names = {
+            OpportunityMode.BUY: "покупка",
+            OpportunityMode.SELL: "продажа",
+            OpportunityMode.BOTH: "покупка и продажа",
+        }
+        threshold = str(opportunity.min_spread_percent).replace(".", ",")
+        lines.append(
+            f"💎 Выгодные лоты: {mode_names[opportunity.mode]}, от {threshold}%"
+        )
     return "\n".join(lines)
+
+
+def format_opportunity_settings(settings: OpportunitySettings) -> str:
+    if not settings.enabled:
+        return (
+            "💎 <b>Выгодные лоты</b>\n\n"
+            "Автоуведомления выключены. Выберите, какие предложения отслеживать."
+        )
+    mode_names = {
+        OpportunityMode.BUY: "покупка",
+        OpportunityMode.SELL: "продажа",
+        OpportunityMode.BOTH: "покупка и продажа",
+    }
+    threshold = str(settings.min_spread_percent).replace(".", ",")
+    return (
+        "💎 <b>Выгодные лоты</b>\n\n"
+        "Автоуведомления включены.\n"
+        f"Направление: {mode_names[settings.mode]}.\n"
+        f"Минимальная расчётная разница: {threshold}%.\n\n"
+        "Сравнение выполняется с биржевым курсом Coinbase. "
+        "Расчёт не гарантирует прибыль."
+    )
 
 
 def asset_keyboard(prefix: str) -> InlineKeyboardMarkup:
@@ -127,21 +172,68 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="💱 Текущие цены", callback_data="menu:price"),
+                InlineKeyboardButton(text="💎 Выгодные лоты", callback_data="menu:opportunity"),
+            ],
+            [
                 InlineKeyboardButton(text="🔔 Создать уведомление", callback_data="menu:alert"),
-            ],
-            [
                 InlineKeyboardButton(text="📈 Изменение в процентах", callback_data="menu:change"),
+            ],
+            [
                 InlineKeyboardButton(text="🕒 Расписание", callback_data="menu:schedule"),
-            ],
-            [
                 InlineKeyboardButton(text="📋 Мои правила", callback_data="menu:alerts"),
-                InlineKeyboardButton(text="🗑 Удалить правило", callback_data="menu:delete"),
             ],
             [
+                InlineKeyboardButton(text="🗑 Удалить правило", callback_data="menu:delete"),
                 InlineKeyboardButton(text="⏸ Пауза", callback_data="menu:pause"),
                 InlineKeyboardButton(text="▶️ Возобновить", callback_data="menu:resume"),
             ],
             [InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
+        ]
+    )
+
+
+def opportunity_mode_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🟢 Покупка", callback_data="opportunity:mode:BUY"
+                ),
+                InlineKeyboardButton(
+                    text="🔵 Продажа", callback_data="opportunity:mode:SELL"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🟢🔵 Покупка и продажа",
+                    callback_data="opportunity:mode:BOTH",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⛔ Отключить автоуведомления",
+                    callback_data="opportunity:disable",
+                )
+            ],
+            _back_row(),
+        ]
+    )
+
+
+def opportunity_threshold_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="От 0,5%", callback_data="opportunity:threshold:0.5"),
+                InlineKeyboardButton(text="От 1%", callback_data="opportunity:threshold:1"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="От 2% — рекомендуется", callback_data="opportunity:threshold:2"
+                ),
+                InlineKeyboardButton(text="От 3%", callback_data="opportunity:threshold:3"),
+            ],
+            _back_row(),
         ]
     )
 

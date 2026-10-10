@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 BOT_SHORT_DESCRIPTION = "Мониторинг лучших P2P-цен Walt в рублях."
 BOT_DESCRIPTION = (
     "Бот мониторит лучшие P2P-предложения Walt для USDT, TON и BTC в рублях, "
-    "показывает биржевой курс Coinbase и отправляет уведомления по заданным условиям."
+    "показывает биржевой курс Coinbase и уведомляет о расчётно выгодных лотах."
 )
 
 
@@ -33,6 +33,7 @@ async def set_commands_best_effort(bot: Bot) -> None:
             [
                 BotCommand(command="start", description="Главное меню"),
                 BotCommand(command="price", description="Текущие цены"),
+                BotCommand(command="deals", description="Выгодные лоты"),
                 BotCommand(command="alert", description="Ценовой порог"),
                 BotCommand(command="change", description="Изменение в процентах"),
                 BotCommand(command="schedule", description="Регулярная сводка"),
