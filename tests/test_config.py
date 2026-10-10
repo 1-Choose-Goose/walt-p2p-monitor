@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from walt_price_bot.config import Settings
 
 
-def test_settings_require_both_secrets(tmp_path: Path) -> None:
+def test_settings_require_bot_and_encryption_secrets(tmp_path: Path) -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, database_path=tmp_path / "bot.db")
 
@@ -15,7 +15,7 @@ def test_settings_never_include_secrets_in_repr(tmp_path: Path) -> None:
     settings = Settings(
         _env_file=None,
         telegram_bot_token="test-token-not-a-real-secret-value",
-        walt_api_key="walt-super-secret-key",
+        credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         database_path=tmp_path / "bot.db",
     )
 
@@ -23,6 +23,17 @@ def test_settings_never_include_secrets_in_repr(tmp_path: Path) -> None:
     assert "abcdefghijklmnopqrstuvwxyz" not in rendered
     assert "walt-super-secret-key" not in rendered
     assert settings.poll_interval_seconds == 30
+    assert settings.walt_api_key is None
+
+
+def test_settings_reject_invalid_credential_encryption_key(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="credential_encryption_key"):
+        Settings(
+            _env_file=None,
+            telegram_bot_token="test-token-not-a-real-secret-value",
+            credential_encryption_key="not-a-fernet-key",
+            database_path=tmp_path / "bot.db",
+        )
 
 
 def test_settings_reject_unknown_timezone(tmp_path: Path) -> None:
@@ -30,7 +41,7 @@ def test_settings_reject_unknown_timezone(tmp_path: Path) -> None:
         Settings(
             _env_file=None,
             telegram_bot_token="test-token-not-a-real-secret-value",
-            walt_api_key="walt-super-secret-key",
+            credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
             database_path=tmp_path / "bot.db",
             timezone="Invalid/Timezone",
         )

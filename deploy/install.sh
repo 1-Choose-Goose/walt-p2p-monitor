@@ -49,6 +49,12 @@ if [[ ! -f ${env_file} ]]; then
   echo "Missing ${env_file}; create it before installation" >&2
   exit 3
 fi
+if ! grep -q '^CREDENTIAL_ENCRYPTION_KEY=' "${env_file}"; then
+  encryption_key=$("${app_dir}/.venv/bin/python" -c \
+    'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode("ascii"))')
+  printf "\nCREDENTIAL_ENCRYPTION_KEY=%s\n" "${encryption_key}" >> "${env_file}"
+  unset encryption_key
+fi
 chown waltbot:waltbot "${env_file}"
 chmod 0600 "${env_file}"
 
