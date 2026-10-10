@@ -1,0 +1,37 @@
+[Unit]
+Description=Walt P2P Telegram Price Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=waltbot
+Group=waltbot
+WorkingDirectory=/opt/walt-price-bot
+EnvironmentFile=/etc/walt-price-bot.env
+ExecStart=/opt/walt-price-bot/.venv/bin/python -m walt_price_bot.main
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/walt-price-bot
+
+[Install]
+WantedBy=multi-user.target
