@@ -288,6 +288,35 @@ class Repository:
             )
             await db.commit()
 
+    async def get_delivery_times(self, telegram_id: int) -> tuple[str | None, str | None]:
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    "SELECT last_monitor_at, last_summary_at FROM user_settings "
+                    "WHERE telegram_id = ?",
+                    (telegram_id,),
+                )
+            ).fetchone()
+        if row is None:
+            raise ValueError("unknown user")
+        return row["last_monitor_at"], row["last_summary_at"]
+
+    async def mark_monitor_cycle(self, telegram_id: int, checked_at: str) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE user_settings SET last_monitor_at = ? WHERE telegram_id = ?",
+                (checked_at, telegram_id),
+            )
+            await db.commit()
+
+    async def mark_summary_sent(self, telegram_id: int, sent_at: str) -> None:
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE user_settings SET last_summary_at = ? WHERE telegram_id = ?",
+                (sent_at, telegram_id),
+            )
+            await db.commit()
+
     async def list_assets(self, *, active_only: bool = True) -> list[AssetCatalogEntry]:
         query = "SELECT * FROM asset_catalog"
         if active_only:

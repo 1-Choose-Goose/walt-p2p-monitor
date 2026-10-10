@@ -30,13 +30,14 @@ async def replace_message(
     *,
     reply_markup: Any | None = None,
 ) -> Message:
-    async with repository.message_delivery_lock:
-        previous_id = await repository.get_last_message_id()
+    telegram_id = message.from_user.id
+    async with repository.user_lock(telegram_id):
+        previous_id = await repository.get_last_message_id(telegram_id)
         if previous_id is not None:
             with contextlib.suppress(TelegramAPIError):
                 await message.bot.delete_message(message.chat.id, previous_id)
         sent = await message.answer(text, reply_markup=reply_markup)
-        await repository.set_last_message_id(sent.message_id)
+        await repository.set_last_message_id(telegram_id, sent.message_id)
         return sent
 
 
@@ -47,13 +48,13 @@ class ReplacingSender:
         self._reply_markup = reply_markup
 
     async def send_message(self, chat_id: int, text: str) -> Any:
-        async with self._repository.message_delivery_lock:
-            previous_id = await self._repository.get_last_message_id()
+        async with self._repository.user_lock(chat_id):
+            previous_id = await self._repository.get_last_message_id(chat_id)
             if previous_id is not None:
                 with contextlib.suppress(TelegramAPIError):
                     await self._bot.delete_message(chat_id, previous_id)
             sent = await self._bot.send_message(
                 chat_id, text, reply_markup=self._reply_markup
             )
-            await self._repository.set_last_message_id(sent.message_id)
+            await self._repository.set_last_message_id(chat_id, sent.message_id)
             return sent

@@ -4,7 +4,7 @@ import aiosqlite
 
 from .models import SEED_ASSETS
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 LEGACY_TABLES = (
     "settings",
     "alerts",
@@ -47,7 +47,9 @@ CREATE_STATEMENTS = (
     CREATE TABLE user_settings (
         telegram_id INTEGER PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
         paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
-        last_message_id INTEGER
+        last_message_id INTEGER,
+        last_monitor_at TEXT,
+        last_summary_at TEXT
     )
     """,
     """
@@ -354,10 +356,17 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
         row = await (
             await db.execute("SELECT version FROM schema_meta WHERE singleton = 1")
         ).fetchone()
-        if row is None or int(row[0]) != CURRENT_SCHEMA_VERSION:
+        if row is None or int(row[0]) not in {2, CURRENT_SCHEMA_VERSION}:
             raise RuntimeError("unsupported database schema version")
         await db.execute("BEGIN IMMEDIATE")
         try:
+            if int(row[0]) == 2:
+                await db.execute("ALTER TABLE user_settings ADD COLUMN last_monitor_at TEXT")
+                await db.execute("ALTER TABLE user_settings ADD COLUMN last_summary_at TEXT")
+                await db.execute(
+                    "UPDATE schema_meta SET version = ? WHERE singleton = 1",
+                    (CURRENT_SCHEMA_VERSION,),
+                )
             await _seed_assets(db)
             await db.execute(
                 """

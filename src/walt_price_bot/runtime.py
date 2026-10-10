@@ -35,7 +35,11 @@ class MessageSender(Protocol):
 
 
 class SnapshotProvider(Protocol):
-    async def get_snapshots(self) -> list[MarketSnapshot]: ...
+    async def get_snapshots(
+        self,
+        assets: Sequence[AssetCatalogEntry] | None = None,
+        filters: MarketFilters | None = None,
+    ) -> list[MarketSnapshot]: ...
 
 
 class ExchangeRateProvider(Protocol):
@@ -151,21 +155,37 @@ async def run_monitor_cycle(
     sender: MessageSender,
     now: datetime,
     *,
+    telegram_id: int | None = None,
     schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
 ) -> None:
-    if await repository.is_paused():
+    telegram_id = telegram_id or await repository.get_owner_id()
+    if await repository.is_paused(telegram_id):
         return
-    owner_id = await repository.get_owner_id()
-    if owner_id is None:
-        return
+    preferences = await repository.get_preferences(telegram_id)
+    selected = set(preferences.assets)
+    assets = tuple(
+        entry for entry in await repository.list_assets() if entry.symbol in selected
+    )
+    filters = MarketFilters(
+        directions=preferences.directions,
+        min_limit_from=preferences.min_limit_from,
+        min_limit_to=preferences.min_limit_to,
+        desired_amount=preferences.desired_amount,
+        buy_payments=preferences.buy_payments,
+        sell_payments=preferences.sell_payments,
+    )
+    try:
+        fetched = await provider.get_snapshots(assets, filters)
+    except TypeError:
+        fetched = await provider.get_snapshots()
     snapshots = [
         snapshot
-        for snapshot in await provider.get_snapshots()
+        for snapshot in fetched
         if _snapshot_is_fresh(snapshot, now)
     ]
     by_asset = {snapshot.asset: snapshot for snapshot in snapshots}
 
-    for rule in await repository.list_alerts(enabled_only=True):
+    for rule in await repository.list_alerts(telegram_id, enabled_only=True):
         snapshot = by_asset.get(rule.asset)
         if snapshot is None:
             continue
@@ -177,15 +197,22 @@ async def run_monitor_cycle(
             if rule.kind is AlertKind.THRESHOLD:
                 evaluation = evaluate_threshold(rule, price)
                 if evaluation.notify:
-                    await sender.send_message(owner_id, _threshold_message(rule, offer))
-                    await repository.update_alert_state(rule.id, armed=False)
+                    if preferences.notifications.threshold:
+                        await sender.send_message(
+                            telegram_id, _threshold_message(rule, offer)
+                        )
+                        await repository.update_alert_state(
+                            telegram_id, rule.id, armed=False
+                        )
                 elif evaluation.armed != rule.armed:
-                    await repository.update_alert_state(rule.id, armed=evaluation.armed)
+                    await repository.update_alert_state(
+                        telegram_id, rule.id, armed=evaluation.armed
+                    )
             else:
                 evaluation = evaluate_percent_change(rule, price)
-                if evaluation.notify:
+                if evaluation.notify and preferences.notifications.percent:
                     await sender.send_message(
-                        owner_id,
+                        telegram_id,
                         _percent_message(
                             rule.asset,
                             rule.quote_side,
@@ -194,18 +221,18 @@ async def run_monitor_cycle(
                         ),
                     )
                     await repository.update_alert_state(
-                        rule.id, baseline=str(evaluation.next_baseline)
+                        telegram_id, rule.id, baseline=str(evaluation.next_baseline)
                     )
                 elif rule.baseline is None and evaluation.next_baseline is not None:
                     await repository.update_alert_state(
-                        rule.id, baseline=str(evaluation.next_baseline)
+                        telegram_id, rule.id, baseline=str(evaluation.next_baseline)
                     )
         except Exception as exc:
             logger.warning("Failed to process alert %s (%s)", rule.id, type(exc).__name__)
 
-    opportunity_settings = await repository.get_opportunity_settings()
-    if opportunity_settings.enabled:
-        async with repository.opportunity_delivery_lock:
+    opportunity_settings = await repository.get_opportunity_settings(telegram_id)
+    if opportunity_settings.enabled and preferences.notifications.opportunity:
+        async with repository.user_lock(telegram_id):
             opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
             for snapshot in snapshots:
                 if snapshot.exchange_price is None:
@@ -226,14 +253,14 @@ async def run_monitor_cycle(
                     if spread < opportunity_settings.min_spread_percent:
                         continue
                     if await repository.was_opportunity_notified(
-                        snapshot.asset, side, offer.id
+                        telegram_id, snapshot.asset, side, offer.id
                     ):
                         continue
                     opportunities.append((snapshot, side, offer, spread))
             if opportunities:
                 try:
                     await sender.send_message(
-                        owner_id,
+                        telegram_id,
                         "\n\n".join(
                             _opportunity_message(
                                 snapshot,
@@ -246,6 +273,7 @@ async def run_monitor_cycle(
                         ),
                     )
                     await repository.mark_opportunities_notified(
+                        telegram_id,
                         [
                             (snapshot.asset, side, offer.id)
                             for snapshot, side, offer, _ in opportunities
@@ -257,14 +285,35 @@ async def run_monitor_cycle(
                         type(exc).__name__,
                     )
 
-    for schedule in await repository.list_schedules(enabled_only=True):
+    for schedule in await repository.list_schedules(telegram_id, enabled_only=True):
+        if not preferences.notifications.scheduled:
+            break
         if not schedule_is_due(schedule, now, timezone=schedule_timezone):
             continue
         try:
-            await sender.send_message(owner_id, format_market_summary(snapshots))
-            await repository.mark_schedule_sent(schedule.id, now.astimezone(UTC).isoformat())
+            await sender.send_message(telegram_id, format_market_summary(snapshots))
+            await repository.mark_schedule_sent(
+                telegram_id, schedule.id, now.astimezone(UTC).isoformat()
+            )
         except Exception as exc:
             logger.warning("Failed to deliver schedule %s (%s)", schedule.id, type(exc).__name__)
+
+    if preferences.summary_enabled and preferences.notifications.scheduled:
+        from .monitoring import interval_summary_is_due
+
+        _, last_summary = await repository.get_delivery_times(telegram_id)
+        if interval_summary_is_due(
+            last_summary, now, preferences.summary_interval_minutes
+        ):
+            try:
+                await sender.send_message(telegram_id, format_market_summary(snapshots))
+                await repository.mark_summary_sent(
+                    telegram_id, now.astimezone(UTC).isoformat()
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to deliver interval summary (%s)", type(exc).__name__
+                )
 
 
 async def monitor_forever(
