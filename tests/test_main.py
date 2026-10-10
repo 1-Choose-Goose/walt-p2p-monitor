@@ -80,6 +80,7 @@ async def test_bot_profile_has_russian_pre_start_greeting() -> None:
     assert "USDT, TON и BTC" in bot.description
     assert "Coinbase" in bot.description
     assert "выгодных" in bot.description.lower()
+    assert "Нажмите /start, чтобы начать работу." in bot.description
 
 
 @pytest.mark.asyncio
