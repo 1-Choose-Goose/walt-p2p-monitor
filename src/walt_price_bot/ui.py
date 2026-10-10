@@ -13,7 +13,9 @@ from .models import (
     OpportunityMode,
     OpportunitySettings,
     P2PAd,
+    QuoteSide,
     ScheduleRule,
+    UserPreferences,
     UserRole,
 )
 
@@ -71,34 +73,37 @@ def parse_daily_time(value: str) -> str:
 def format_market_summary(
     snapshots: list[MarketSnapshot],
     expected_assets: list[Asset] | tuple[Asset, ...] | set[Asset] | None = None,
+    directions: tuple[QuoteSide, ...] = (QuoteSide.BUY, QuoteSide.SELL),
 ) -> str:
     blocks = ["📊 <b>Walt P2P — актуальные цены</b>"]
     for snapshot in snapshots:
         lines = [f"\n<b>{snapshot.asset.value} / RUB</b>"]
         if snapshot.exchange_price is not None:
             lines.append(f"🏦 Биржевой курс (Coinbase): {_money(snapshot.exchange_price)} ₽")
-        if not snapshot.buy_source_available:
-            lines.append("🟢 Купить: Walt временно недоступен")
-        elif snapshot.buy is None:
-            lines.append("🟢 Купить: подходящих P2P-объявлений нет")
-        else:
-            lines.extend(
-                [
-                    f"🟢 Купить: {_money(snapshot.buy.price)} ₽",
-                    _offer_details(snapshot.buy),
-                ]
-            )
-        if not snapshot.sell_source_available:
-            lines.append("🔵 Продать: Walt временно недоступен")
-        elif snapshot.sell is None:
-            lines.append("🔵 Продать: подходящих P2P-объявлений нет")
-        else:
-            lines.extend(
-                [
-                    f"🔵 Продать: {_money(snapshot.sell.price)} ₽",
-                    _offer_details(snapshot.sell),
-                ]
-            )
+        if QuoteSide.BUY in directions:
+            if not snapshot.buy_source_available:
+                lines.append("🟢 Купить: Walt временно недоступен")
+            elif snapshot.buy is None:
+                lines.append("🟢 Купить: подходящих P2P-объявлений нет")
+            else:
+                lines.extend(
+                    [
+                        f"🟢 Купить: {_money(snapshot.buy.price)} ₽",
+                        _offer_details(snapshot.buy),
+                    ]
+                )
+        if QuoteSide.SELL in directions:
+            if not snapshot.sell_source_available:
+                lines.append("🔵 Продать: Walt временно недоступен")
+            elif snapshot.sell is None:
+                lines.append("🔵 Продать: подходящих P2P-объявлений нет")
+            else:
+                lines.extend(
+                    [
+                        f"🔵 Продать: {_money(snapshot.sell.price)} ₽",
+                        _offer_details(snapshot.sell),
+                    ]
+                )
         blocks.append("\n".join(lines))
     available = {snapshot.asset for snapshot in snapshots}
     expected = (
@@ -163,12 +168,14 @@ def format_opportunity_settings(settings: OpportunitySettings) -> str:
         OpportunityMode.BOTH: "покупка и продажа",
     }
     threshold = str(settings.min_spread_percent).replace(".", ",")
+    premium = str(settings.max_buy_premium_percent).replace(".", ",")
     return (
         "💎 <b>Выгодные лоты</b>\n\n"
         "Автоуведомления включены.\n"
         f"Направление: {mode_names[settings.mode]}.\n"
-        f"Минимальная расчётная разница: {threshold}%.\n"
-        "Сравнение выполняется с биржевым курсом Coinbase."
+        f"Покупка: любая цена ниже биржи или до {premium}% выше.\n"
+        f"Продажа: минимум {threshold}% выше биржи.\n"
+        "Сравнение с курсом Coinbase."
     )
 
 
@@ -215,7 +222,7 @@ def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📈 Изменение цены", callback_data="menu:change"),
             ],
             [
-                InlineKeyboardButton(text="🕒 Сводки", callback_data="menu:schedule"),
+                InlineKeyboardButton(text="🕒 Сводки", callback_data="settings:summary:"),
                 InlineKeyboardButton(text="📋 Мои правила", callback_data="menu:alerts"),
             ],
             [
@@ -235,7 +242,47 @@ def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
     )
 
 
-def opportunity_mode_keyboard() -> InlineKeyboardMarkup:
+def summary_settings_keyboard(preferences: UserPreferences) -> InlineKeyboardMarkup:
+    current = preferences.summary_interval_minutes if preferences.summary_enabled else None
+    choices = (
+        ("Каждую 1 минуту", 1),
+        ("Каждые 15 минут", 15),
+        ("Каждый час", 60),
+        ("Каждые 6 часов", 360),
+        ("Раз в сутки", 1440),
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if current == minutes else '☐'} {label}",
+                callback_data=f"settings:summary_interval:{minutes}",
+            )
+        ]
+        for label, minutes in choices
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text=f"{'✅' if current is None else '☐'} Выключить сводки",
+                    callback_data="settings:summary_off:",
+                )
+            ],
+            [InlineKeyboardButton(text="Назад", callback_data="menu:notifications")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def opportunity_mode_keyboard(
+    settings: OpportunitySettings | None = None,
+) -> InlineKeyboardMarkup:
+    spread = settings.min_spread_percent if settings is not None else Decimal("2")
+    spread_text = _percent_text(spread)
+    premium = (
+        settings.max_buy_premium_percent if settings is not None else Decimal("2")
+    )
+    premium_text = _percent_text(premium)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -250,6 +297,18 @@ def opportunity_mode_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🟢🔵 Покупка и продажа",
                     callback_data="opportunity:mode:BOTH",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"📈 Минимум для продажи: {spread_text}%",
+                    callback_data="opportunity:threshold-menu",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"📉 Переплата при покупке: до {premium_text}%",
+                    callback_data="opportunity:premium-menu",
                 )
             ],
             [
@@ -280,6 +339,35 @@ def opportunity_threshold_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Своя наценка", callback_data="opportunity:threshold:custom"
                 )
+            ],
+            _back_row(),
+        ]
+    )
+
+
+def opportunity_premium_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Без переплаты", callback_data="opportunity:premium:0"
+                ),
+                InlineKeyboardButton(
+                    text="До 0,5%", callback_data="opportunity:premium:0.5"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="До 1%", callback_data="opportunity:premium:1"),
+                InlineKeyboardButton(
+                    text="До 2% — рекомендуется",
+                    callback_data="opportunity:premium:2",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="До 3%", callback_data="opportunity:premium:3"),
+                InlineKeyboardButton(
+                    text="Свой процент", callback_data="opportunity:premium:custom"
+                ),
             ],
             _back_row(),
         ]
@@ -370,3 +458,8 @@ def _walt_offer_url(ad: P2PAd) -> str:
 def _money(value: Decimal) -> str:
     rendered = f"{value:,.2f}".replace(",", " ").replace(".", ",")
     return rendered.removesuffix(",00")
+
+
+def _percent_text(value: Decimal) -> str:
+    rendered = f"{value:f}"
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered

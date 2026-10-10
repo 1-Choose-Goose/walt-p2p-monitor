@@ -19,6 +19,7 @@ from walt_price_bot.ui import (
     main_menu_keyboard,
     notifications_menu_keyboard,
     opportunity_mode_keyboard,
+    opportunity_premium_keyboard,
     opportunity_threshold_keyboard,
     parse_daily_time,
     parse_positive_decimal,
@@ -116,6 +117,20 @@ def test_market_summary_shows_exchange_rate_without_matching_p2p_offer() -> None
     assert "Продать: подходящих P2P-объявлений нет" in text
 
 
+def test_market_summary_hides_unselected_sell_direction() -> None:
+    snapshot = MarketSnapshot(
+        asset=Asset.USDT,
+        buy=None,
+        sell=None,
+        exchange_price=Decimal("85.05"),
+    )
+
+    text = format_market_summary([snapshot], directions=(QuoteSide.BUY,))
+
+    assert "Купить:" in text
+    assert "Продать:" not in text
+
+
 def test_main_menu_has_clear_russian_visual_actions() -> None:
     keyboard = main_menu_keyboard()
     buttons = [button for row in keyboard.inline_keyboard for button in row]
@@ -136,7 +151,12 @@ def test_notification_actions_are_grouped_and_markup_is_user_selectable() -> Non
         for button in row
     ]
     callbacks = {button.callback_data for button in buttons}
-    assert {"menu:opportunity", "menu:alert", "menu:change", "menu:schedule"} <= callbacks
+    assert {
+        "menu:opportunity",
+        "menu:alert",
+        "menu:change",
+        "settings:summary:",
+    } <= callbacks
     assert "settings:notifications:" in callbacks
     assert "menu:pause" in callbacks
     threshold_texts = [
@@ -167,6 +187,7 @@ def test_flow_keyboards_have_back_to_main_menu_button() -> None:
         schedule_keyboard(),
         delete_keyboard([], []),
         opportunity_mode_keyboard(),
+        opportunity_premium_keyboard(),
         opportunity_threshold_keyboard(),
     ]
 
@@ -187,7 +208,7 @@ def test_opportunity_controls_are_fully_russian_and_show_current_status() -> Non
 
     text = format_opportunity_settings(settings)
     mode_buttons = [
-        button for row in opportunity_mode_keyboard().inline_keyboard for button in row
+        button for row in opportunity_mode_keyboard(settings).inline_keyboard for button in row
     ]
     threshold_buttons = [
         button for row in opportunity_threshold_keyboard().inline_keyboard for button in row
@@ -200,8 +221,12 @@ def test_opportunity_controls_are_fully_russian_and_show_current_status() -> Non
         "opportunity:mode:BUY",
         "opportunity:mode:SELL",
         "opportunity:mode:BOTH",
+        "opportunity:threshold-menu",
+        "opportunity:premium-menu",
         "opportunity:disable",
     }
+    assert any("Минимум для продажи: 2%" in button.text for button in mode_buttons)
+    assert any("Переплата при покупке: до 2%" in button.text for button in mode_buttons)
     assert any("рекомендуется" in button.text for button in threshold_buttons)
 
 

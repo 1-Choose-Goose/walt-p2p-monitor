@@ -4,7 +4,7 @@ import aiosqlite
 
 from .models import SEED_ASSETS
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 LEGACY_TABLES = (
     "settings",
     "alerts",
@@ -129,7 +129,8 @@ CREATE_STATEMENTS = (
         telegram_id INTEGER PRIMARY KEY REFERENCES users(telegram_id) ON DELETE CASCADE,
         enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
         mode TEXT NOT NULL DEFAULT 'BOTH' CHECK (mode IN ('BUY', 'SELL', 'BOTH')),
-        min_spread_percent TEXT NOT NULL DEFAULT '2'
+        min_spread_percent TEXT NOT NULL DEFAULT '2',
+        max_buy_premium_percent TEXT NOT NULL DEFAULT '2'
     )
     """,
     """
@@ -359,16 +360,25 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
         row = await (
             await db.execute("SELECT version FROM schema_meta WHERE singleton = 1")
         ).fetchone()
-        if row is None or int(row[0]) not in {2, CURRENT_SCHEMA_VERSION}:
+        if row is None or int(row[0]) not in {2, 3, CURRENT_SCHEMA_VERSION}:
             raise RuntimeError("unsupported database schema version")
         await db.execute("BEGIN IMMEDIATE")
         try:
-            if int(row[0]) == 2:
+            version = int(row[0])
+            if version == 2:
                 await db.execute("ALTER TABLE user_settings ADD COLUMN last_monitor_at TEXT")
                 await db.execute("ALTER TABLE user_settings ADD COLUMN last_summary_at TEXT")
+                version = 3
+            if version == 3:
+                await db.execute(
+                    "ALTER TABLE opportunity_settings ADD COLUMN "
+                    "max_buy_premium_percent TEXT NOT NULL DEFAULT '2'"
+                )
+                version = 4
+            if version != int(row[0]):
                 await db.execute(
                     "UPDATE schema_meta SET version = ? WHERE singleton = 1",
-                    (CURRENT_SCHEMA_VERSION,),
+                    (version,),
                 )
             await _seed_assets(db)
             await db.execute(

@@ -10,13 +10,17 @@ from walt_price_bot.preferences import (
     SettingsAction,
     SettingsCallback,
     format_preferences,
+    limit_settings_keyboard,
     notification_categories_keyboard,
     parse_money,
+    payment_methods_keyboard,
     return_to_main_menu,
     settings_keyboard,
     show_quiet_hours,
     summary_interval_minutes,
+    time_picker_keyboard,
     toggle_asset,
+    toggle_payment_method,
 )
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 
@@ -94,6 +98,15 @@ def test_typed_settings_callback_round_trip() -> None:
     assert unpacked.value == "2000"
 
 
+def test_limit_menu_uses_valid_callback_values() -> None:
+    keyboard = limit_settings_keyboard()
+    callbacks = [
+        button.callback_data for row in keyboard.inline_keyboard for button in row
+    ]
+
+    assert "settings:limit:500-2000" in callbacks
+
+
 def test_settings_do_not_duplicate_notifications_section() -> None:
     callbacks = {
         button.callback_data
@@ -117,6 +130,13 @@ async def test_notification_categories_show_state_and_return_to_notification_hub
 
     assert buttons[0].text.startswith("✅ ")
     assert buttons[-1].callback_data == "menu:notifications"
+    assert all("Сводки" not in button.text for button in buttons)
+
+    await repository.update_preferences(ADMIN_TELEGRAM_ID, notify_threshold=False)
+    keyboard = notification_categories_keyboard(
+        await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    )
+    assert keyboard.inline_keyboard[0][0].text.startswith("☐ ")
 
 
 @pytest.mark.asyncio
@@ -151,5 +171,65 @@ async def test_quiet_hours_button_opens_presets() -> None:
         "Выключить",
         "22:00–08:00",
         "23:00–07:00",
+        "⚙️ Свое время",
     ]
     callback.answer.assert_awaited_once()
+
+
+def test_custom_quiet_hours_use_button_time_picker() -> None:
+    hours = time_picker_keyboard(SettingsAction.QUIET_START_HOUR, range(24))
+    minutes = time_picker_keyboard(
+        SettingsAction.QUIET_START_MINUTE, (0, 15, 30, 45)
+    )
+
+    assert [button.text for button in hours.inline_keyboard[0]] == [
+        "00",
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+    ]
+    assert [button.text for button in minutes.inline_keyboard[0]] == [
+        "00",
+        "15",
+        "30",
+        "45",
+    ]
+    assert hours.inline_keyboard[-1][0].callback_data == "settings:quiet:"
+
+
+@pytest.mark.asyncio
+async def test_payment_methods_can_be_selected_individually(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+
+    assert await toggle_payment_method(repository, ADMIN_TELEGRAM_ID, "sbp") == ("sbp",)
+    assert await toggle_payment_method(repository, ADMIN_TELEGRAM_ID, "sberbankru") == (
+        "sbp",
+        "sberbankru",
+    )
+    assert await toggle_payment_method(repository, ADMIN_TELEGRAM_ID, "sbp") == (
+        "sberbankru",
+    )
+    with pytest.raises(ValueError, match="хотя бы один"):
+        await toggle_payment_method(repository, ADMIN_TELEGRAM_ID, "sberbankru")
+
+    assert await toggle_payment_method(repository, ADMIN_TELEGRAM_ID, "any") == ("any",)
+    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    assert preferences.buy_payments == preferences.sell_payments == ("any",)
+
+
+@pytest.mark.asyncio
+async def test_payment_keyboard_shows_selected_method(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    await toggle_payment_method(repository, ADMIN_TELEGRAM_ID, "tinkoff")
+
+    keyboard = payment_methods_keyboard(
+        await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    )
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+
+    t_bank = next(button for button in buttons if "Т-Банк" in button.text)
+    assert t_bank.text.startswith("✅ ")

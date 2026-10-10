@@ -23,3 +23,15 @@ def opportunity_percent(
         else p2p_price - exchange_price
     )
     return (difference / exchange_price * Decimal("100")).quantize(Decimal("0.01"))
+
+
+def opportunity_is_acceptable(
+    side: QuoteSide,
+    *,
+    difference_percent: Decimal,
+    min_sell_spread_percent: Decimal,
+    max_buy_premium_percent: Decimal,
+) -> bool:
+    if side is QuoteSide.BUY:
+        return difference_percent >= 0 or -difference_percent <= max_buy_premium_percent
+    return difference_percent >= min_sell_spread_percent

@@ -19,7 +19,11 @@ from .models import (
     P2PAd,
     QuoteSide,
 )
-from .opportunities import mode_includes_side, opportunity_percent
+from .opportunities import (
+    mode_includes_side,
+    opportunity_is_acceptable,
+    opportunity_percent,
+)
 from .repository import Repository
 from .scheduling import schedule_is_due
 from .ui import _money, _offer_details, format_market_summary
@@ -250,7 +254,14 @@ async def run_monitor_cycle(
                         p2p_price=offer.price,
                         exchange_price=snapshot.exchange_price,
                     )
-                    if spread < opportunity_settings.min_spread_percent:
+                    if not opportunity_is_acceptable(
+                        side,
+                        difference_percent=spread,
+                        min_sell_spread_percent=opportunity_settings.min_spread_percent,
+                        max_buy_premium_percent=(
+                            opportunity_settings.max_buy_premium_percent
+                        ),
+                    ):
                         continue
                     if await repository.was_opportunity_notified(
                         telegram_id, snapshot.asset, side, offer.id
@@ -268,6 +279,7 @@ async def run_monitor_cycle(
                                 offer,
                                 spread,
                                 opportunity_settings.min_spread_percent,
+                                opportunity_settings.max_buy_premium_percent,
                             )
                             for snapshot, side, offer, spread in opportunities
                         ),
@@ -286,7 +298,7 @@ async def run_monitor_cycle(
                     )
 
     for schedule in await repository.list_schedules(telegram_id, enabled_only=True):
-        if not preferences.notifications.scheduled:
+        if preferences.summary_enabled or not preferences.notifications.scheduled:
             break
         if not schedule_is_due(schedule, now, timezone=schedule_timezone):
             continue
@@ -294,7 +306,9 @@ async def run_monitor_cycle(
             await sender.send_message(
                 telegram_id,
                 format_market_summary(
-                    snapshots, tuple(entry.symbol for entry in assets)
+                    snapshots,
+                    tuple(entry.symbol for entry in assets),
+                    preferences.directions,
                 ),
             )
             await repository.mark_schedule_sent(
@@ -314,7 +328,9 @@ async def run_monitor_cycle(
                 await sender.send_message(
                     telegram_id,
                     format_market_summary(
-                        snapshots, tuple(entry.symbol for entry in assets)
+                        snapshots,
+                        tuple(entry.symbol for entry in assets),
+                        preferences.directions,
                     ),
                 )
                 await repository.mark_summary_sent(
@@ -384,15 +400,29 @@ def _opportunity_message(
     offer: P2PAd,
     spread: Decimal,
     threshold: Decimal,
+    max_buy_premium: Decimal,
 ) -> str:
     action = "покупка" if side is QuoteSide.BUY else "продажа"
+    if side is QuoteSide.BUY and spread < 0:
+        comparison = (
+            f"Переплата к бирже: {str(-spread).replace('.', ',')}% "
+            f"(допуск до {str(max_buy_premium).replace('.', ',')}%)"
+        )
+    elif side is QuoteSide.BUY:
+        comparison = f"Цена ниже биржи на {str(spread).replace('.', ',')}%"
+    else:
+        comparison = f"Цена выше биржи на {str(spread).replace('.', ',')}%"
     return (
         f"💎 <b>Расчётно выгодный лот: {action} {snapshot.asset.value}</b>\n"
         f"Биржевой курс Coinbase: {_money(snapshot.exchange_price)} ₽\n"
         f"Цена P2P: {_money(offer.price)} ₽\n"
-        f"Расчётная разница: +{str(spread).replace('.', ',')}%\n"
-        f"Ваш порог: {str(threshold).replace('.', ',')}%\n"
-        f"{_offer_details(offer)}"
+        f"{comparison}\n"
+        + (
+            f"Минимум для продажи: {str(threshold).replace('.', ',')}%\n"
+            if side is QuoteSide.SELL
+            else ""
+        )
+        + _offer_details(offer)
     )
 
 

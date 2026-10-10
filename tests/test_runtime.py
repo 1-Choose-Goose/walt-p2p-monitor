@@ -293,8 +293,36 @@ async def test_profitable_offer_notifies_selected_side_once(tmp_path: Path) -> N
     assert "Расчётно выгодный лот: покупка USDT" in text
     assert "Биржевой курс Coinbase: 90 ₽" in text
     assert "Цена P2P: 89 ₽" in text
-    assert "Расчётная разница: +1,11%" in text
+    assert "Цена ниже биржи на 1,11%" in text
     assert "Открыть объявление" in text
+
+
+@pytest.mark.asyncio
+async def test_buy_slightly_above_exchange_notifies_within_premium(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("2"),
+        max_buy_premium_percent=Decimal("2"),
+    )
+    provider = FakeProvider()
+    provider.snapshots = [
+        MarketSnapshot(
+            asset=Asset.USDT,
+            buy=ad(Asset.USDT, QuoteSide.SELL, "86"),
+            sell=None,
+            exchange_price=Decimal("85"),
+        )
+    ]
+    sender = FakeSender()
+
+    await run_monitor_cycle(repository, provider, sender, datetime.now(UTC))
+
+    assert len(sender.messages) == 1
+    assert "Переплата к бирже: 1,18% (допуск до 2%)" in sender.messages[0][1]
 
 
 @pytest.mark.asyncio

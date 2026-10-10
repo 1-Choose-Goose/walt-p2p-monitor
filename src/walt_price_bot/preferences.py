@@ -1,4 +1,5 @@
 import re
+from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
@@ -15,7 +16,7 @@ from .messaging import DeleteIncomingMessagesMiddleware
 from .models import Asset, QuoteSide, UserPreferences
 from .onboarding import WELCOME
 from .repository import Repository
-from .ui import main_menu_keyboard
+from .ui import main_menu_keyboard, summary_settings_keyboard
 
 
 class SettingsAction(StrEnum):
@@ -29,13 +30,21 @@ class SettingsAction(StrEnum):
     DIRECTION = "direction"
     PAYMENT = "payment"
     PAYMENT_SET = "payment_set"
+    PAYMENT_TOGGLE = "payment_toggle"
     INTERVAL = "interval"
+    SUMMARY = "summary"
     SUMMARY_INTERVAL = "summary_interval"
+    SUMMARY_OFF = "summary_off"
     MONITOR_INTERVAL = "monitor_interval"
     NOTIFICATIONS = "notifications"
     NOTIFICATION_TOGGLE = "notification_toggle"
     QUIET = "quiet"
     QUIET_SET = "quiet_set"
+    QUIET_CUSTOM = "quiet_custom"
+    QUIET_START_HOUR = "quiet_start_hour"
+    QUIET_START_MINUTE = "quiet_start_minute"
+    QUIET_END_HOUR = "quiet_end_hour"
+    QUIET_END_MINUTE = "quiet_end_minute"
     EXCHANGE = "exchange"
     PAUSE = "pause"
     RESET = "reset"
@@ -50,6 +59,29 @@ class SettingsCallback(CallbackData, prefix="settings"):
 class PreferencesFlow(StatesGroup):
     custom_limit = State()
     desired_amount = State()
+    quiet_custom = State()
+
+
+PAYMENT_METHODS = (
+    ("СБП", "sbp"),
+    ("Сбербанк", "sberbankru"),
+    ("Т-Банк", "tinkoff"),
+    ("Альфа-Банк", "alfabankru"),
+    ("ВТБ", "vtbbankru"),
+    ("Райффайзен Банк", "raiffeisenbankru"),
+    ("Ozon Банк", "ozonbank"),
+    ("Газпромбанк", "gazprombank"),
+    ("МТС Банк", "mtsbank"),
+    ("Россельхозбанк", "rosselkhozbank"),
+    ("Росбанк", "rosbank"),
+    ("Русский Стандарт", "russianstandardbank"),
+    ("Ак Барс Банк", "akbarsbank"),
+)
+PAYMENT_LABELS = dict(PAYMENT_METHODS) | {
+    "Все российские банки": "russian_banks",
+    "Любой способ": "any",
+}
+PAYMENT_NAMES_BY_CODE = {code: label for label, code in PAYMENT_LABELS.items()}
 
 
 def parse_money(text: str) -> Decimal:
@@ -195,7 +227,6 @@ def notification_categories_keyboard(
     choices = [
         ("Ценовые пороги", "threshold", preferences.notifications.threshold),
         ("Изменения цены", "percent", preferences.notifications.percent),
-        ("Сводки", "scheduled", preferences.notifications.scheduled),
         ("Выгодные лоты", "opportunity", preferences.notifications.opportunity),
     ]
     rows = [
@@ -216,6 +247,105 @@ def notification_categories_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def payment_methods_keyboard(preferences: UserPreferences) -> InlineKeyboardMarkup:
+    selected = set(preferences.buy_payments)
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{'✅' if code in selected else '☐'} {label}",
+            callback_data=SettingsCallback(
+                action=SettingsAction.PAYMENT_TOGGLE,
+                value=code,
+            ).pack(),
+        )
+        for label, code in PAYMENT_LABELS.items()
+    ]
+    specific_count = len(PAYMENT_METHODS)
+    rows = [
+        buttons[index : index + 2]
+        for index in range(0, specific_count, 2)
+    ]
+    rows.extend([[button] for button in buttons[specific_count:]])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=SettingsCallback(action=SettingsAction.OPEN).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def toggle_payment_method(
+    repository: Repository,
+    telegram_id: int,
+    method: str,
+) -> tuple[str, ...]:
+    if method not in PAYMENT_NAMES_BY_CODE:
+        raise ValueError("Неизвестный способ оплаты")
+    current = set((await repository.get_preferences(telegram_id)).buy_payments)
+    if method in {"any", "russian_banks"}:
+        selected = (method,)
+    else:
+        broad_selection = bool(current & {"any", "russian_banks"})
+        current.discard("any")
+        current.discard("russian_banks")
+        if broad_selection:
+            current = {method}
+        elif method in current:
+            current.remove(method)
+        else:
+            current.add(method)
+        if not current:
+            raise ValueError("Нужно оставить хотя бы один способ оплаты")
+        selected = tuple(code for _, code in PAYMENT_METHODS if code in current)
+    await repository.update_preferences(
+        telegram_id,
+        buy_payments=selected,
+        sell_payments=selected,
+    )
+    return selected
+
+
+def limit_settings_keyboard() -> InlineKeyboardMarkup:
+    return _choice_keyboard(
+        [
+            ("500–2 000 ₽", SettingsAction.LIMIT, "500-2000"),
+            ("1 000–2 000 ₽", SettingsAction.LIMIT, "1000-2000"),
+            ("2 000 ₽ и выше", SettingsAction.LIMIT, "2000-none"),
+            ("500 ₽ и выше", SettingsAction.LIMIT, "500-none"),
+            ("Другая сумма", SettingsAction.LIMIT, "custom"),
+            ("Сумма сделки: 1 000 ₽", SettingsAction.AMOUNT, "1000"),
+            ("Сумма сделки: 5 000 ₽", SettingsAction.AMOUNT, "5000"),
+            ("Сумма сделки: 25 000 ₽", SettingsAction.AMOUNT, "25000"),
+            ("Не учитывать сумму сделки", SettingsAction.AMOUNT, "none"),
+        ]
+    )
+
+
+def time_picker_keyboard(
+    action: SettingsAction,
+    values: Iterable[int],
+) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{value:02d}",
+            callback_data=SettingsCallback(action=action, value=f"{value:02d}").pack(),
+        )
+        for value in values
+    ]
+    rows = [buttons[index : index + 6] for index in range(0, len(buttons), 6)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=SettingsCallback(action=SettingsAction.QUIET).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def return_to_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if callback.message:
@@ -232,6 +362,7 @@ async def show_quiet_hours(callback: CallbackQuery) -> None:
                     ("Выключить", SettingsAction.QUIET_SET, "off"),
                     ("22:00–08:00", SettingsAction.QUIET_SET, "2200-0800"),
                     ("23:00–07:00", SettingsAction.QUIET_SET, "2300-0700"),
+                    ("⚙️ Свое время", SettingsAction.QUIET_CUSTOM, ""),
                 ]
             ),
         )
@@ -342,15 +473,38 @@ def build_preferences_router(repository: Repository) -> Router:
             await show_settings(callback)
         elif action is SettingsAction.PAYMENT and callback.message:
             await callback.message.edit_text(
-                "🏦 <b>Способы оплаты</b>",
-                reply_markup=_choice_keyboard(
-                    [
-                        ("СБП, Сбербанк и российские банки", SettingsAction.PAYMENT_SET, "banks"),
-                        ("Любой способ", SettingsAction.PAYMENT_SET, "any"),
-                    ]
+                "🏦 <b>Способы оплаты</b>\n\n"
+                "✅ — учитывать, ☐ — не учитывать.",
+                reply_markup=payment_methods_keyboard(
+                    await repository.get_preferences(telegram_id)
                 ),
             )
             await callback.answer()
+        elif action is SettingsAction.PAYMENT_TOGGLE:
+            try:
+                selected = await toggle_payment_method(
+                    repository, telegram_id, callback_data.value
+                )
+            except ValueError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+            if callback.message:
+                await callback.message.edit_reply_markup(
+                    reply_markup=payment_methods_keyboard(
+                        await repository.get_preferences(telegram_id)
+                    )
+                )
+            if callback_data.value == "any":
+                status = "Разрешён любой способ оплаты"
+            elif callback_data.value == "russian_banks":
+                status = "Выбраны все российские банки"
+            else:
+                enabled = callback_data.value in selected
+                status = (
+                    f"{PAYMENT_NAMES_BY_CODE[callback_data.value]}: "
+                    f"{'включён' if enabled else 'выключен'}"
+                )
+            await callback.answer(status)
         elif action is SettingsAction.PAYMENT_SET:
             payments = (
                 ("sbp", "sberbankru", "russian_banks")
@@ -363,16 +517,11 @@ def build_preferences_router(repository: Repository) -> Router:
             await show_settings(callback)
         elif action is SettingsAction.INTERVAL and callback.message:
             await callback.message.edit_text(
-                "⏱ <b>Как часто обновлять?</b>",
+                "⏱ <b>Как часто проверять цены?</b>",
                 reply_markup=_choice_keyboard(
                     [
                         ("Проверка цен: 30 сек.", SettingsAction.MONITOR_INTERVAL, "30"),
                         ("Проверка цен: 1 мин.", SettingsAction.MONITOR_INTERVAL, "60"),
-                        ("Сводка: 1 мин.", SettingsAction.SUMMARY_INTERVAL, "1"),
-                        ("Сводка: 15 мин.", SettingsAction.SUMMARY_INTERVAL, "15"),
-                        ("Сводка: 1 ч.", SettingsAction.SUMMARY_INTERVAL, "60"),
-                        ("Сводка: 6 ч.", SettingsAction.SUMMARY_INTERVAL, "360"),
-                        ("Сводка: 24 ч.", SettingsAction.SUMMARY_INTERVAL, "1440"),
                     ]
                 ),
             )
@@ -382,16 +531,48 @@ def build_preferences_router(repository: Repository) -> Router:
                 telegram_id, monitor_interval_seconds=int(callback_data.value)
             )
             await show_settings(callback)
+        elif action is SettingsAction.SUMMARY and callback.message:
+            await callback.message.edit_text(
+                "🕒 <b>Сводки</b>\n\nВыберите частоту или отключите сводки.",
+                reply_markup=summary_settings_keyboard(
+                    await repository.get_preferences(telegram_id)
+                ),
+            )
+            await callback.answer()
         elif action is SettingsAction.SUMMARY_INTERVAL:
             await repository.update_preferences(
                 telegram_id,
                 summary_interval_minutes=int(callback_data.value),
                 summary_enabled=True,
+                notify_scheduled=True,
             )
-            await show_settings(callback)
+            if callback.message:
+                await callback.message.edit_text(
+                    "🕒 <b>Сводки</b>\n\nЧастота сохранена.",
+                    reply_markup=summary_settings_keyboard(
+                        await repository.get_preferences(telegram_id)
+                    ),
+                )
+            await callback.answer("Частота сводок изменена")
+        elif action is SettingsAction.SUMMARY_OFF:
+            await repository.update_preferences(
+                telegram_id,
+                summary_enabled=False,
+                notify_scheduled=False,
+            )
+            if callback.message:
+                await callback.message.edit_text(
+                    "🕒 <b>Сводки</b>\n\nСводки выключены.",
+                    reply_markup=summary_settings_keyboard(
+                        await repository.get_preferences(telegram_id)
+                    ),
+                )
+            await callback.answer("Сводки выключены")
         elif action is SettingsAction.NOTIFICATIONS and callback.message:
             await callback.message.edit_text(
-                "🔔 <b>Категории уведомлений</b>",
+                "🔔 <b>Категории уведомлений</b>\n\n"
+                "✅ — включено, ☐ — выключено.\n"
+                "Нажмите на категорию, чтобы изменить её состояние.",
                 reply_markup=notification_categories_keyboard(
                     await repository.get_preferences(telegram_id)
                 ),
@@ -402,12 +583,12 @@ def build_preferences_router(repository: Repository) -> Router:
             values = {
                 "threshold": current.notifications.threshold,
                 "percent": current.notifications.percent,
-                "scheduled": current.notifications.scheduled,
                 "opportunity": current.notifications.opportunity,
             }
             field = callback_data.value
+            enabled = not values[field]
             await repository.update_preferences(
-                telegram_id, **{f"notify_{field}": not values[field]}
+                telegram_id, **{f"notify_{field}": enabled}
             )
             if callback.message:
                 await callback.message.edit_reply_markup(
@@ -415,10 +596,82 @@ def build_preferences_router(repository: Repository) -> Router:
                         await repository.get_preferences(telegram_id)
                     )
                 )
-            await callback.answer("Сохранено")
+            labels = {
+                "threshold": "Ценовые пороги",
+                "percent": "Изменения цены",
+                "opportunity": "Выгодные лоты",
+            }
+            await callback.answer(
+                f"{labels[field]}: {'включены' if enabled else 'выключены'}"
+            )
         elif action is SettingsAction.QUIET:
             await show_quiet_hours(callback)
+        elif action is SettingsAction.QUIET_CUSTOM:
+            await state.clear()
+            await state.set_state(PreferencesFlow.quiet_custom)
+            if callback.message:
+                await callback.message.edit_text(
+                    "🌙 <b>Начало тихих часов</b>\n\nВыберите час:",
+                    reply_markup=time_picker_keyboard(
+                        SettingsAction.QUIET_START_HOUR, range(24)
+                    ),
+                )
+            await callback.answer()
+        elif action is SettingsAction.QUIET_START_HOUR:
+            await state.update_data(quiet_start_hour=callback_data.value)
+            if callback.message:
+                await callback.message.edit_text(
+                    f"🌙 <b>Начало: {callback_data.value}:__</b>\n\n"
+                    "Выберите минуты:",
+                    reply_markup=time_picker_keyboard(
+                        SettingsAction.QUIET_START_MINUTE, (0, 15, 30, 45)
+                    ),
+                )
+            await callback.answer()
+        elif action is SettingsAction.QUIET_START_MINUTE:
+            data = await state.get_data()
+            start = f"{data['quiet_start_hour']}:{callback_data.value}"
+            await state.update_data(quiet_start=start)
+            if callback.message:
+                await callback.message.edit_text(
+                    f"🌙 <b>Начало: {start}</b>\n\n"
+                    "Теперь выберите час окончания:",
+                    reply_markup=time_picker_keyboard(
+                        SettingsAction.QUIET_END_HOUR, range(24)
+                    ),
+                )
+            await callback.answer()
+        elif action is SettingsAction.QUIET_END_HOUR:
+            await state.update_data(quiet_end_hour=callback_data.value)
+            if callback.message:
+                await callback.message.edit_text(
+                    f"🌙 <b>Окончание: {callback_data.value}:__</b>\n\n"
+                    "Выберите минуты:",
+                    reply_markup=time_picker_keyboard(
+                        SettingsAction.QUIET_END_MINUTE, (0, 15, 30, 45)
+                    ),
+                )
+            await callback.answer()
+        elif action is SettingsAction.QUIET_END_MINUTE:
+            data = await state.get_data()
+            start = str(data["quiet_start"])
+            end = f"{data['quiet_end_hour']}:{callback_data.value}"
+            if start == end:
+                await callback.answer(
+                    "Начало и окончание не должны совпадать.",
+                    show_alert=True,
+                )
+                return
+            await repository.update_preferences(
+                telegram_id,
+                quiet_enabled=True,
+                quiet_start=start,
+                quiet_end=end,
+            )
+            await state.clear()
+            await show_settings(callback)
         elif action is SettingsAction.QUIET_SET:
+            await state.clear()
             if callback_data.value == "off":
                 await repository.update_preferences(telegram_id, quiet_enabled=False)
             else:
@@ -447,19 +700,7 @@ def build_preferences_router(repository: Repository) -> Router:
         elif action is SettingsAction.LIMIT and not callback_data.value and callback.message:
             await callback.message.edit_text(
                 "💵 <b>Допустимый минимальный лимит объявления</b>",
-                reply_markup=_choice_keyboard(
-                    [
-                        ("500–2 000 ₽", SettingsAction.LIMIT, "500:2000"),
-                        ("1 000–2 000 ₽", SettingsAction.LIMIT, "1000:2000"),
-                        ("2 000 ₽ и выше", SettingsAction.LIMIT, "2000:none"),
-                        ("500 ₽ и выше", SettingsAction.LIMIT, "500:none"),
-                        ("Другая сумма", SettingsAction.LIMIT, "custom"),
-                        ("Сумма сделки: 1 000 ₽", SettingsAction.AMOUNT, "1000"),
-                        ("Сумма сделки: 5 000 ₽", SettingsAction.AMOUNT, "5000"),
-                        ("Сумма сделки: 25 000 ₽", SettingsAction.AMOUNT, "25000"),
-                        ("Не учитывать сумму сделки", SettingsAction.AMOUNT, "none"),
-                    ]
-                ),
+                reply_markup=limit_settings_keyboard(),
             )
             await callback.answer()
         elif action is SettingsAction.LIMIT and callback_data.value == "custom":
@@ -470,7 +711,7 @@ def build_preferences_router(repository: Repository) -> Router:
                     "Введите нижнюю границу минимального лимита в рублях."
                 )
         elif action is SettingsAction.LIMIT:
-            lower, upper = callback_data.value.split(":", 1)
+            lower, upper = callback_data.value.split("-", 1)
             await repository.update_preferences(
                 telegram_id,
                 min_limit_from=Decimal(lower),

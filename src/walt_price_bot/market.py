@@ -55,6 +55,10 @@ def _supports_payments(ad: P2PAd, configured: tuple[str, ...]) -> bool:
         return True
     payments = {payment.lower() for payment in ad.payments}
     allowed = {payment.lower() for payment in configured}
+    if "sberbankru" in allowed:
+        allowed.add("sberbank")
+    if "alfabankru" in allowed:
+        allowed.add("alfabank")
     if "russian_banks" in allowed:
         allowed |= ALLOWED_PURCHASE_PAYMENTS
     return bool(payments & allowed)

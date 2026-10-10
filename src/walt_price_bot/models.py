@@ -231,3 +231,4 @@ class OpportunitySettings:
     enabled: bool
     mode: OpportunityMode
     min_spread_percent: Decimal
+    max_buy_premium_percent: Decimal = Decimal("2")

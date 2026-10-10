@@ -678,7 +678,7 @@ class Repository:
         async with self._connect() as db:
             row = await (
                 await db.execute(
-                    "SELECT enabled, mode, min_spread_percent "
+                    "SELECT enabled, mode, min_spread_percent, max_buy_premium_percent "
                     "FROM opportunity_settings WHERE telegram_id = ?",
                     (telegram_id,),
                 )
@@ -689,6 +689,7 @@ class Repository:
             enabled=bool(row["enabled"]),
             mode=OpportunityMode(row["mode"]),
             min_spread_percent=Decimal(row["min_spread_percent"]),
+            max_buy_premium_percent=Decimal(row["max_buy_premium_percent"]),
         )
 
     async def configure_opportunities(
@@ -697,6 +698,7 @@ class Repository:
         *,
         mode: OpportunityMode,
         min_spread_percent: Decimal,
+        max_buy_premium_percent: Decimal | None = None,
     ) -> None:
         if (
             not min_spread_percent.is_finite()
@@ -704,12 +706,26 @@ class Repository:
             or min_spread_percent > Decimal("100")
         ):
             raise ValueError("min_spread_percent must be between 0 and 100")
+        if max_buy_premium_percent is not None and (
+            not max_buy_premium_percent.is_finite()
+            or max_buy_premium_percent < 0
+            or max_buy_premium_percent > Decimal("100")
+        ):
+            raise ValueError("max_buy_premium_percent must be between 0 and 100")
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
                 "UPDATE opportunity_settings SET enabled = 1, mode = ?, "
-                "min_spread_percent = ? WHERE telegram_id = ?",
-                (mode.value, str(min_spread_percent), telegram_id),
+                "min_spread_percent = ?, max_buy_premium_percent = "
+                "COALESCE(?, max_buy_premium_percent) WHERE telegram_id = ?",
+                (
+                    mode.value,
+                    str(min_spread_percent),
+                    str(max_buy_premium_percent)
+                    if max_buy_premium_percent is not None
+                    else None,
+                    telegram_id,
+                ),
             )
             await db.execute(
                 "DELETE FROM opportunity_notifications WHERE telegram_id = ?",

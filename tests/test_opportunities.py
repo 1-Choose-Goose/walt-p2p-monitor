@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from walt_price_bot.models import QuoteSide
-from walt_price_bot.opportunities import opportunity_percent
+from walt_price_bot.opportunities import opportunity_is_acceptable, opportunity_percent
 
 
 def test_buy_opportunity_is_positive_when_p2p_is_below_exchange() -> None:
@@ -20,6 +20,27 @@ def test_sell_opportunity_is_positive_when_p2p_is_above_exchange() -> None:
         p2p_price=Decimal("105"),
         exchange_price=Decimal("100"),
     ) == Decimal("5.00")
+
+
+def test_buy_above_exchange_is_allowed_within_user_premium() -> None:
+    difference = opportunity_percent(
+        QuoteSide.BUY,
+        p2p_price=Decimal("86"),
+        exchange_price=Decimal("85"),
+    )
+
+    assert opportunity_is_acceptable(
+        QuoteSide.BUY,
+        difference_percent=difference,
+        min_sell_spread_percent=Decimal("2"),
+        max_buy_premium_percent=Decimal("2"),
+    )
+    assert not opportunity_is_acceptable(
+        QuoteSide.BUY,
+        difference_percent=difference,
+        min_sell_spread_percent=Decimal("2"),
+        max_buy_premium_percent=Decimal("1"),
+    )
 
 
 def test_opportunity_can_be_negative_and_rejects_invalid_exchange_price() -> None:
