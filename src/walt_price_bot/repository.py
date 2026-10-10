@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 import aiosqlite
@@ -6,6 +7,8 @@ from .models import (
     AlertKind,
     AlertRule,
     Asset,
+    OpportunityMode,
+    OpportunitySettings,
     QuoteSide,
     ScheduleKind,
     ScheduleRule,
@@ -40,6 +43,19 @@ CREATE TABLE IF NOT EXISTS schedules (
     daily_time TEXT,
     last_sent_at TEXT,
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS opportunity_settings (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    mode TEXT NOT NULL DEFAULT 'BOTH' CHECK (mode IN ('BUY', 'SELL', 'BOTH')),
+    min_spread_percent TEXT NOT NULL DEFAULT '2'
+);
+INSERT OR IGNORE INTO opportunity_settings(singleton) VALUES (1);
+CREATE TABLE IF NOT EXISTS opportunity_notifications (
+    asset TEXT NOT NULL CHECK (asset IN ('USDT', 'TON', 'BTC')),
+    quote_side TEXT NOT NULL CHECK (quote_side IN ('BUY', 'SELL')),
+    last_ad_id TEXT NOT NULL,
+    PRIMARY KEY (asset, quote_side)
 );
 """
 
@@ -261,6 +277,71 @@ class Repository:
             cursor = await db.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
             await db.commit()
             return cursor.rowcount == 1
+
+    async def get_opportunity_settings(self) -> OpportunitySettings:
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            row = await (
+                await db.execute(
+                    "SELECT enabled, mode, min_spread_percent "
+                    "FROM opportunity_settings WHERE singleton = 1"
+                )
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("opportunity settings are not initialized")
+        return OpportunitySettings(
+            enabled=bool(row["enabled"]),
+            mode=OpportunityMode(row["mode"]),
+            min_spread_percent=Decimal(row["min_spread_percent"]),
+        )
+
+    async def configure_opportunities(
+        self, *, mode: OpportunityMode, min_spread_percent: Decimal
+    ) -> None:
+        if (
+            not min_spread_percent.is_finite()
+            or min_spread_percent <= 0
+            or min_spread_percent > Decimal("100")
+        ):
+            raise ValueError("min_spread_percent must be between 0 and 100")
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE opportunity_settings "
+                "SET enabled = 1, mode = ?, min_spread_percent = ? WHERE singleton = 1",
+                (mode.value, str(min_spread_percent)),
+            )
+            await db.execute("DELETE FROM opportunity_notifications")
+            await db.commit()
+
+    async def disable_opportunities(self) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE opportunity_settings SET enabled = 0 WHERE singleton = 1"
+            )
+            await db.commit()
+
+    async def get_last_opportunity_ad(self, asset: Asset, side: QuoteSide) -> str | None:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT last_ad_id FROM opportunity_notifications "
+                    "WHERE asset = ? AND quote_side = ?",
+                    (asset.value, side.value),
+                )
+            ).fetchone()
+        return row[0] if row else None
+
+    async def mark_opportunity_notified(
+        self, asset: Asset, side: QuoteSide, ad_id: str
+    ) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "INSERT INTO opportunity_notifications(asset, quote_side, last_ad_id) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(asset, quote_side) DO UPDATE SET last_ad_id = excluded.last_ad_id",
+                (asset.value, side.value, ad_id),
+            )
+            await db.commit()
 
     @staticmethod
     async def _scalar(db: aiosqlite.Connection, query: str) -> object | None:

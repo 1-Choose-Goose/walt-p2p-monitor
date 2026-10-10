@@ -1,10 +1,17 @@
 import asyncio
 import sqlite3
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from walt_price_bot.models import AlertKind, Asset, QuoteSide, ThresholdDirection
+from walt_price_bot.models import (
+    AlertKind,
+    Asset,
+    OpportunityMode,
+    QuoteSide,
+    ThresholdDirection,
+)
 from walt_price_bot.repository import Repository
 
 
@@ -113,3 +120,50 @@ async def test_repository_migrates_existing_alert_table_for_bitcoin(tmp_path: Pa
     )
 
     assert [alert.asset for alert in await repository.list_alerts()] == [Asset.USDT, Asset.BTC]
+
+
+@pytest.mark.asyncio
+async def test_opportunity_notifications_are_opt_in_and_persist_settings(tmp_path: Path) -> None:
+    database = tmp_path / "bot.db"
+    repository = Repository(database)
+    await repository.initialize()
+
+    defaults = await repository.get_opportunity_settings()
+    assert defaults.enabled is False
+    assert defaults.mode is OpportunityMode.BOTH
+    assert defaults.min_spread_percent == Decimal("2")
+
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1.5"),
+    )
+
+    reopened = Repository(database)
+    await reopened.initialize()
+    configured = await reopened.get_opportunity_settings()
+    assert configured.enabled is True
+    assert configured.mode is OpportunityMode.BUY
+    assert configured.min_spread_percent == Decimal("1.5")
+
+    await reopened.disable_opportunities()
+    assert (await reopened.get_opportunity_settings()).enabled is False
+
+
+@pytest.mark.asyncio
+async def test_opportunity_deduplication_is_per_asset_and_side(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+
+    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.BUY) is None
+    await repository.mark_opportunity_notified(Asset.USDT, QuoteSide.BUY, "offer-1")
+    await repository.mark_opportunity_notified(Asset.BTC, QuoteSide.SELL, "offer-2")
+
+    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.BUY) == "offer-1"
+    assert await repository.get_last_opportunity_ad(Asset.BTC, QuoteSide.SELL) == "offer-2"
+    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.SELL) is None
+
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BOTH,
+        min_spread_percent=Decimal("2"),
+    )
+    assert await repository.get_last_opportunity_ad(Asset.USDT, QuoteSide.BUY) is None

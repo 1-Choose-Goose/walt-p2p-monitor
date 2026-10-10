@@ -14,6 +14,12 @@ class QuoteSide(StrEnum):
     SELL = "SELL"
 
 
+class OpportunityMode(StrEnum):
+    BUY = "BUY"
+    SELL = "SELL"
+    BOTH = "BOTH"
+
+
 class AlertKind(StrEnum):
     THRESHOLD = "threshold"
     PERCENT = "percent"
@@ -74,3 +80,10 @@ class ScheduleRule:
     daily_time: str | None
     last_sent_at: str | None
     enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OpportunitySettings:
+    enabled: bool
+    mode: OpportunityMode
+    min_spread_percent: Decimal
