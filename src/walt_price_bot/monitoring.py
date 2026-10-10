@@ -120,7 +120,16 @@ async def run_multi_user_cycle(
     concurrency: int = 5,
     run_user: Callable[..., Awaitable[None]] = run_user_cycle,
 ) -> None:
-    users = await repository.list_users(status=AccessStatus.ACTIVE, limit=100)
+    users: list[User] = []
+    offset = 0
+    while True:
+        page = await repository.list_users(
+            status=AccessStatus.ACTIVE, limit=100, offset=offset
+        )
+        users.extend(page)
+        if len(page) < 100:
+            break
+        offset += len(page)
     semaphore = asyncio.Semaphore(concurrency)
 
     async def isolated(user: User) -> None:

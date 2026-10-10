@@ -9,6 +9,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .access import AccessRequirement
+from .messaging import DeleteIncomingMessagesMiddleware
 from .models import AccessStatus, User, UserRole
 from .repository import ADMIN_TELEGRAM_ID, InvalidUserTransitionError, Repository
 
@@ -199,6 +200,7 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
     if admin_id != ADMIN_TELEGRAM_ID:
         raise ValueError("administrator id cannot be overridden")
     router = Router(name="admin")
+    router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
     @router.message(Command("admin"), flags={"access": AccessRequirement.ADMIN})
     async def admin_panel(message: Message) -> None:

@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .access import AccessRequirement
+from .messaging import DeleteIncomingMessagesMiddleware
 from .models import Asset, QuoteSide, UserPreferences
 from .repository import Repository
 
@@ -216,6 +217,7 @@ async def assets_keyboard(repository: Repository, telegram_id: int) -> InlineKey
 
 def build_preferences_router(repository: Repository) -> Router:
     router = Router(name="preferences")
+    router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
     async def show_settings(event: Message | CallbackQuery) -> None:
         telegram_id = event.from_user.id

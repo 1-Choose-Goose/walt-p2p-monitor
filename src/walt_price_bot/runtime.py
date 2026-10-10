@@ -232,7 +232,7 @@ async def run_monitor_cycle(
 
     opportunity_settings = await repository.get_opportunity_settings(telegram_id)
     if opportunity_settings.enabled and preferences.notifications.opportunity:
-        async with repository.user_lock(telegram_id):
+        async with repository.opportunity_lock(telegram_id):
             opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
             for snapshot in snapshots:
                 if snapshot.exchange_price is None:

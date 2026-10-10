@@ -45,6 +45,7 @@ class Repository:
         self.opportunity_delivery_lock = asyncio.Lock()
         self.message_delivery_lock = asyncio.Lock()
         self._user_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._opportunity_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:
@@ -61,6 +62,9 @@ class Repository:
 
     def user_lock(self, telegram_id: int) -> asyncio.Lock:
         return self._user_locks[telegram_id]
+
+    def opportunity_lock(self, telegram_id: int) -> asyncio.Lock:
+        return self._opportunity_locks[telegram_id]
 
     async def claim_owner(self, telegram_id: int) -> bool:
         return telegram_id == ADMIN_TELEGRAM_ID

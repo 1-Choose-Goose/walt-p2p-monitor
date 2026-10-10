@@ -19,6 +19,7 @@ from pydantic import SecretStr
 from .access import AccessRequirement
 from .credentials import CredentialCipher
 from .keyboards import phone_request_keyboard, remove_reply_keyboard
+from .messaging import DeleteIncomingMessagesMiddleware
 from .models import AccessStatus, AssetCatalogEntry
 from .repository import ADMIN_TELEGRAM_ID, Repository
 from .walt import TokenValidationResult, TokenValidationStatus, validate_walt_token
@@ -162,11 +163,13 @@ def build_onboarding_router(
     if admin_id != ADMIN_TELEGRAM_ID:
         raise ValueError("administrator id cannot be overridden")
     router = Router(name="onboarding")
+    router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
     @router.message(Command("start"), flags={"access": AccessRequirement.PUBLIC})
     async def start(message: Message, state: FSMContext) -> None:
-        await state.clear()
         user = await repository.get_user(message.from_user.id)
+        if user is not None:
+            await state.clear()
         if user and user.status is AccessStatus.ACTIVE:
             from .ui import main_menu_keyboard
 

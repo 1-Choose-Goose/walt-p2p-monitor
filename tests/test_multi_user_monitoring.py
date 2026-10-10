@@ -112,3 +112,11 @@ async def test_one_minute_summary_is_marked_only_after_send(tmp_path: Path) -> N
     sender.send_message.side_effect = None
     await run_user_cycle(user, repository, provider, sender, now)
     assert (await repository.get_delivery_times(user.telegram_id))[1] == now.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_opportunity_and_message_delivery_use_distinct_locks(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+
+    assert repository.opportunity_lock(768929900) is not repository.user_lock(768929900)
