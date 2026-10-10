@@ -10,11 +10,13 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand
 
+from .access import AccessMiddleware
 from .config import Settings
 from .exchange import CoinbaseRatesClient
+from .fsm_storage import SQLiteFSMStorage
 from .handlers import build_router
 from .messaging import ReplacingSender
-from .repository import Repository
+from .repository import ADMIN_TELEGRAM_ID, Repository
 from .runtime import MarketService, monitor_forever
 from .ui import main_menu_keyboard
 from .walt import WaltClient
@@ -90,7 +92,10 @@ async def run() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     try:
-        dispatcher = Dispatcher()
+        dispatcher = Dispatcher(storage=SQLiteFSMStorage(repository))
+        access_middleware = AccessMiddleware(repository, ADMIN_TELEGRAM_ID)
+        dispatcher.message.outer_middleware(access_middleware)
+        dispatcher.callback_query.outer_middleware(access_middleware)
 
         async with aiohttp.ClientSession() as session:
             client = WaltClient(
