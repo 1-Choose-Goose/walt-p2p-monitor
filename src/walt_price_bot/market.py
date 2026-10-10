@@ -4,7 +4,23 @@ from .models import P2PAd, QuoteSide
 
 MIN_PURCHASE_LIMIT = 500
 MAX_PURCHASE_LIMIT = 2000
-ALLOWED_PURCHASE_PAYMENTS = {"sbp", "sberbank", "sberbankru"}
+ALLOWED_PURCHASE_PAYMENTS = {
+    "akbarsbank",
+    "alfabank",
+    "alfabankru",
+    "gazprombank",
+    "mtsbank",
+    "ozonbank",
+    "raiffeisenbankru",
+    "rosbank",
+    "rosselkhozbank",
+    "russianstandardbank",
+    "sbp",
+    "sberbank",
+    "sberbankru",
+    "tinkoff",
+    "vtbbankru",
+}
 
 
 class MarketUnavailable(RuntimeError):

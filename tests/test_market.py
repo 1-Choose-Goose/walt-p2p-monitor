@@ -50,7 +50,7 @@ def test_buy_offer_requires_minimum_limit_between_500_and_2000_rubles() -> None:
     assert select_best_buy_offer(offers).id == "upper-bound"
 
 
-def test_buy_offer_accepts_sbp_and_sberbank() -> None:
+def test_buy_offer_accepts_sbp_sberbank_and_other_russian_banks() -> None:
     offers = [
         ad("foreign", QuoteSide.SELL, "80.00", payments=("international_transfer",)),
         ad("sber", QuoteSide.SELL, "81.00", payments=("sberbankru", "sbp")),
@@ -58,7 +58,13 @@ def test_buy_offer_accepts_sbp_and_sberbank() -> None:
         ad("sbp", QuoteSide.SELL, "88.00", payments=("sbp",)),
     ]
 
-    assert select_best_buy_offer(offers).id == "sber"
+    assert select_best_buy_offer(offers).id == "vtb"
+
+
+def test_buy_offer_accepts_supported_russian_banks() -> None:
+    for payment in ("alfabankru", "gazprombank", "tinkoff", "ozonbank"):
+        offer = ad(payment, QuoteSide.SELL, "89.00", payments=(payment,))
+        assert select_best_buy_offer([offer]).id == payment
 
 
 def test_sell_offer_is_highest_online_buy_ad() -> None:

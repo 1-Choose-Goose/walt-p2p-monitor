@@ -7,8 +7,18 @@ from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, Schedule
 
 WALT_URL = "https://t.me/walt"
 PAYMENT_NAMES = {
+    "akbarsbank": "Ак Барс Банк",
+    "alfabank": "Альфа-Банк",
+    "alfabankru": "Альфа-Банк",
     "dushanbecitybank": "Душанбе Сити Банк",
+    "gazprombank": "Газпромбанк",
     "international_transfer": "Международный перевод",
+    "mtsbank": "МТС Банк",
+    "ozonbank": "Ozon Банк",
+    "raiffeisenbankru": "Райффайзен Банк",
+    "rosbank": "Росбанк",
+    "rosselkhozbank": "Россельхозбанк",
+    "russianstandardbank": "Русский Стандарт",
     "sberbank": "Сбербанк",
     "sberbankru": "Сбербанк",
     "sbp": "СБП",
