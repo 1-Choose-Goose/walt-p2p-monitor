@@ -26,7 +26,7 @@ def ad(asset: Asset, side: QuoteSide, price: str) -> P2PAd:
         price=Decimal(price),
         min_amount=Decimal("1000"),
         max_amount=Decimal("50000"),
-        payments=("sberbank",),
+        payments=("sbp",),
         rating=Decimal("0.99"),
         is_online=True,
     )
@@ -80,12 +80,14 @@ async def test_market_service_fetches_each_market_once() -> None:
 
     snapshots = await MarketService(client).get_snapshots()
 
-    assert len(snapshots) == 2
+    assert len(snapshots) == 3
     assert set(client.calls) == {
         (Asset.USDT, QuoteSide.BUY),
         (Asset.USDT, QuoteSide.SELL),
         (Asset.TON, QuoteSide.BUY),
         (Asset.TON, QuoteSide.SELL),
+        (Asset.BTC, QuoteSide.BUY),
+        (Asset.BTC, QuoteSide.SELL),
     }
 
 
@@ -116,6 +118,8 @@ async def test_monitor_uses_one_snapshot_for_multiple_rules_and_commits_success(
 
     assert provider.calls == 1
     assert len(sender.messages) == 2
+    assert all("ниже или равно" in text for _, text in sender.messages)
+    assert all('href="https://t.me/walt"' in text for _, text in sender.messages)
     assert all(rule.armed is False for rule in await repository.list_alerts())
 
 

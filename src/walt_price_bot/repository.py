@@ -18,13 +18,14 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS settings (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     owner_id INTEGER,
-    paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1))
+    paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+    last_message_id INTEGER
 );
 INSERT OR IGNORE INTO settings(singleton) VALUES (1);
 CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK (kind IN ('threshold', 'percent')),
-    asset TEXT NOT NULL CHECK (asset IN ('USDT', 'TON')),
+    asset TEXT NOT NULL CHECK (asset IN ('USDT', 'TON', 'BTC')),
     quote_side TEXT NOT NULL CHECK (quote_side IN ('BUY', 'SELL')),
     threshold_direction TEXT CHECK (threshold_direction IN ('above', 'below')),
     target TEXT NOT NULL,
@@ -51,6 +52,38 @@ class Repository:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as db:
             await db.executescript(SCHEMA)
+            columns = {
+                row[1] for row in await (await db.execute("PRAGMA table_info(settings)")).fetchall()
+            }
+            if "last_message_id" not in columns:
+                await db.execute("ALTER TABLE settings ADD COLUMN last_message_id INTEGER")
+            alerts_sql = await self._scalar(
+                db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alerts'"
+            )
+            if alerts_sql is not None and "'BTC'" not in alerts_sql:
+                await db.executescript(
+                    """
+                    ALTER TABLE alerts RENAME TO alerts_legacy;
+                    CREATE TABLE alerts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        kind TEXT NOT NULL CHECK (kind IN ('threshold', 'percent')),
+                        asset TEXT NOT NULL CHECK (asset IN ('USDT', 'TON', 'BTC')),
+                        quote_side TEXT NOT NULL CHECK (quote_side IN ('BUY', 'SELL')),
+                        threshold_direction TEXT CHECK (threshold_direction IN ('above', 'below')),
+                        target TEXT NOT NULL,
+                        baseline TEXT,
+                        armed INTEGER NOT NULL DEFAULT 1 CHECK (armed IN (0, 1)),
+                        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
+                    );
+                    INSERT INTO alerts
+                        (id, kind, asset, quote_side, threshold_direction, target,
+                         baseline, armed, enabled)
+                    SELECT id, kind, asset, quote_side, threshold_direction, target,
+                           baseline, armed, enabled
+                    FROM alerts_legacy;
+                    DROP TABLE alerts_legacy;
+                    """
+                )
             await db.commit()
 
     async def claim_owner(self, telegram_id: int) -> bool:
@@ -96,6 +129,20 @@ class Repository:
         async with aiosqlite.connect(self.path) as db:
             value = await self._scalar(db, "SELECT paused FROM settings WHERE singleton = 1")
             return bool(value)
+
+    async def get_last_message_id(self) -> int | None:
+        async with aiosqlite.connect(self.path) as db:
+            return await self._scalar(
+                db, "SELECT last_message_id FROM settings WHERE singleton = 1"
+            )
+
+    async def set_last_message_id(self, message_id: int | None) -> None:
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                "UPDATE settings SET last_message_id = ? WHERE singleton = 1",
+                (message_id,),
+            )
+            await db.commit()
 
     async def add_alert(
         self,

@@ -6,6 +6,7 @@ from enum import StrEnum
 class Asset(StrEnum):
     USDT = "USDT"
     TON = "TON"
+    BTC = "BTC"
 
 
 class QuoteSide(StrEnum):
@@ -40,6 +41,7 @@ class P2PAd:
     payments: tuple[str, ...]
     rating: Decimal | None
     is_online: bool
+    number: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

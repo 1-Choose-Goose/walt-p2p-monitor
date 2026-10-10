@@ -3,7 +3,13 @@ from decimal import Decimal
 import pytest
 
 from walt_price_bot.models import Asset, MarketSnapshot, P2PAd, QuoteSide
-from walt_price_bot.ui import format_market_summary, parse_daily_time, parse_positive_decimal
+from walt_price_bot.ui import (
+    asset_keyboard,
+    format_market_summary,
+    main_menu_keyboard,
+    parse_daily_time,
+    parse_positive_decimal,
+)
 
 
 def quote(identifier: str, side: QuoteSide, price: str) -> P2PAd:
@@ -18,6 +24,7 @@ def quote(identifier: str, side: QuoteSide, price: str) -> P2PAd:
         payments=("sberbank", "tinkoff"),
         rating=Decimal("0.9875"),
         is_online=True,
+        number="A1B2C3",
     )
 
 
@@ -34,8 +41,10 @@ def test_market_summary_shows_ruble_buy_sell_and_offer_details() -> None:
     assert "Купить: 89,50 ₽" in text
     assert "Продать: 90,10 ₽" in text
     assert "1 000–50 000 ₽" in text
-    assert "sberbank, tinkoff" in text
+    assert "Сбербанк, Т-Банк" in text
     assert "Trader" in text
+    assert 'href="https://t.me/walt"' in text
+    assert "Объявление №A1B2C3" in text
 
 
 def test_market_summary_escapes_untrusted_walt_text() -> None:
@@ -59,6 +68,41 @@ def test_market_summary_escapes_untrusted_walt_text() -> None:
     assert "&lt;b&gt;fake&lt;/b&gt;" in text
     assert "bank&lt;script&gt;" in text
     assert "<b>fake</b>" not in text
+
+
+def test_market_summary_explains_when_filtered_offer_is_unavailable() -> None:
+    text = format_market_summary([])
+
+    assert text.count("Подходящих онлайн-объявлений сейчас нет.") == 3
+    assert "BTC / RUB" in text
+
+
+def test_main_menu_has_clear_russian_visual_actions() -> None:
+    keyboard = main_menu_keyboard()
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+
+    assert [button.callback_data for button in buttons] == [
+        "menu:price",
+        "menu:alert",
+        "menu:change",
+        "menu:schedule",
+        "menu:alerts",
+        "menu:delete",
+        "menu:pause",
+        "menu:resume",
+        "menu:help",
+    ]
+    assert all(any("А" <= char <= "я" for char in button.text) for button in buttons)
+
+
+def test_asset_keyboard_includes_bitcoin_in_russian() -> None:
+    buttons = [button for row in asset_keyboard("alert").inline_keyboard for button in row]
+
+    assert [(button.text, button.callback_data) for button in buttons] == [
+        ("USDT", "alert:asset:USDT"),
+        ("TON", "alert:asset:TON"),
+        ("Биткоин", "alert:asset:BTC"),
+    ]
 
 
 @pytest.mark.parametrize("value", ["", "0", "-1", "nan", "1e20", "abc"])

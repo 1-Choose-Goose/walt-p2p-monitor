@@ -3,7 +3,18 @@ from html import escape
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .models import AlertKind, AlertRule, MarketSnapshot, P2PAd, ScheduleRule
+from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, ScheduleRule
+
+WALT_URL = "https://t.me/walt"
+PAYMENT_NAMES = {
+    "dushanbecitybank": "Душанбе Сити Банк",
+    "international_transfer": "Международный перевод",
+    "sberbank": "Сбербанк",
+    "sberbankru": "Сбербанк",
+    "sbp": "СБП",
+    "tinkoff": "Т-Банк",
+    "vtbbankru": "ВТБ",
+}
 
 
 def parse_positive_decimal(value: str, *, maximum: Decimal = Decimal("100")) -> Decimal:
@@ -44,6 +55,10 @@ def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
                 ]
             )
         )
+    available = {snapshot.asset for snapshot in snapshots}
+    for asset in Asset:
+        if asset not in available:
+            blocks.append(f"\n<b>{asset.value} / RUB</b>\nПодходящих онлайн-объявлений сейчас нет.")
     return "\n".join(blocks)
 
 
@@ -78,7 +93,32 @@ def asset_keyboard(prefix: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="USDT", callback_data=f"{prefix}:asset:USDT"),
                 InlineKeyboardButton(text="TON", callback_data=f"{prefix}:asset:TON"),
+                InlineKeyboardButton(text="Биткоин", callback_data=f"{prefix}:asset:BTC"),
             ]
+        ]
+    )
+
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💱 Текущие цены", callback_data="menu:price"),
+                InlineKeyboardButton(text="🔔 Создать уведомление", callback_data="menu:alert"),
+            ],
+            [
+                InlineKeyboardButton(text="📈 Изменение в процентах", callback_data="menu:change"),
+                InlineKeyboardButton(text="🕒 Расписание", callback_data="menu:schedule"),
+            ],
+            [
+                InlineKeyboardButton(text="📋 Мои правила", callback_data="menu:alerts"),
+                InlineKeyboardButton(text="🗑 Удалить правило", callback_data="menu:delete"),
+            ],
+            [
+                InlineKeyboardButton(text="⏸ Пауза", callback_data="menu:pause"),
+                InlineKeyboardButton(text="▶️ Возобновить", callback_data="menu:resume"),
+            ],
+            [InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
         ]
     )
 
@@ -134,10 +174,14 @@ def delete_keyboard(alerts: list[AlertRule], schedules: list[ScheduleRule]) -> I
 
 def _offer_details(ad: P2PAd) -> str:
     nickname = escape(ad.nickname)
-    payments = ", ".join(escape(payment) for payment in ad.payments)
+    payments = ", ".join(
+        escape(PAYMENT_NAMES.get(payment.lower(), payment)) for payment in ad.payments
+    )
+    ad_number = escape(ad.number or ad.id)
     return (
         f"   {nickname} · {_money(ad.min_amount)}–{_money(ad.max_amount)} ₽\n"
-        f"   {payments or 'способ оплаты не указан'}"
+        f"   {payments or 'способ оплаты не указан'}\n"
+        f'   🔗 <a href="{WALT_URL}">Открыть Walt</a> · Объявление №{ad_number}'
     )
 
 

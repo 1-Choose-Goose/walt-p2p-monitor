@@ -11,8 +11,10 @@ from aiogram.types import BotCommand
 
 from .config import Settings
 from .handlers import build_router
+from .messaging import ReplacingSender
 from .repository import Repository
 from .runtime import MarketService, monitor_forever
+from .ui import main_menu_keyboard
 from .walt import WaltClient
 
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ async def run() -> None:
                 monitor_forever(
                     repository,
                     market,
-                    bot,
+                    ReplacingSender(bot, repository, reply_markup=main_menu_keyboard()),
                     interval_seconds=settings.poll_interval_seconds,
                 ),
                 name="walt-monitor",

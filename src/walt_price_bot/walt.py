@@ -99,6 +99,7 @@ class WaltClient:
         try:
             identifier = str(item["id"])
             nickname = str(item["nickname"])
+            number = str(item["number"])
         except KeyError as exc:
             raise WaltAPIError("missing Walt ad identity") from exc
         return P2PAd(
@@ -112,4 +113,5 @@ class WaltClient:
             payments=tuple(payments),
             rating=rating,
             is_online=item.get("isOnline") is True,
+            number=number,
         )

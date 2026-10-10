@@ -12,12 +12,14 @@ from walt_price_bot.repository import Repository
 async def test_first_start_claims_owner_and_greets(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    message = SimpleNamespace(from_user=SimpleNamespace(id=101), answer=AsyncMock())
+    answer = AsyncMock(return_value=SimpleNamespace(message_id=77))
+    message = SimpleNamespace(from_user=SimpleNamespace(id=101), answer=answer)
 
     await handle_start(message, repository)
 
     assert await repository.get_owner_id() == 101
     assert "Walt P2P" in message.answer.await_args.args[0]
+    assert await repository.get_last_message_id() == 77
 
 
 @pytest.mark.asyncio
