@@ -47,7 +47,13 @@ def _supports_allowed_purchase_payment(ad: P2PAd) -> bool:
 
 
 def select_best_sell_offer(ads: Iterable[P2PAd]) -> P2PAd:
-    eligible = [ad for ad in ads if ad.is_online and ad.side is QuoteSide.BUY]
+    eligible = [
+        ad
+        for ad in ads
+        if ad.is_online
+        and ad.side is QuoteSide.BUY
+        and MIN_PURCHASE_LIMIT <= ad.min_amount <= MAX_PURCHASE_LIMIT
+    ]
     if not eligible:
         raise MarketUnavailable("no online buy offers")
     return max(eligible, key=lambda ad: ad.price)

@@ -74,6 +74,17 @@ def test_sell_offer_is_highest_online_buy_ad() -> None:
     assert select_best_sell_offer(offers).id == "best"
 
 
+def test_sell_offer_requires_minimum_limit_between_500_and_2000_rubles() -> None:
+    offers = [
+        ad("too-low", QuoteSide.BUY, "105.00", min_amount="499"),
+        ad("too-high", QuoteSide.BUY, "104.00", min_amount="2000.01"),
+        ad("lower-bound", QuoteSide.BUY, "101.00", min_amount="500"),
+        ad("upper-bound", QuoteSide.BUY, "102.00", min_amount="2000"),
+    ]
+
+    assert select_best_sell_offer(offers).id == "upper-bound"
+
+
 def test_empty_market_is_not_a_zero_price() -> None:
     with pytest.raises(MarketUnavailable):
         select_best_buy_offer([])
