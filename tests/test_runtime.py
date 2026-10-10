@@ -225,7 +225,6 @@ async def test_profitable_offer_notifies_selected_side_once(tmp_path: Path) -> N
     assert "Биржевой курс Coinbase: 90 ₽" in text
     assert "Цена P2P: 89 ₽" in text
     assert "Расчётная разница: +1,11%" in text
-    assert "не гарантирует прибыль" in text
     assert "Открыть объявление" in text
 
 

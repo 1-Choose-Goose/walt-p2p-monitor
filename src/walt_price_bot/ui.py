@@ -148,9 +148,8 @@ def format_opportunity_settings(settings: OpportunitySettings) -> str:
         "💎 <b>Выгодные лоты</b>\n\n"
         "Автоуведомления включены.\n"
         f"Направление: {mode_names[settings.mode]}.\n"
-        f"Минимальная расчётная разница: {threshold}%.\n\n"
-        "Сравнение выполняется с биржевым курсом Coinbase. "
-        "Расчёт не гарантирует прибыль."
+        f"Минимальная расчётная разница: {threshold}%.\n"
+        "Сравнение выполняется с биржевым курсом Coinbase."
     )
 
 

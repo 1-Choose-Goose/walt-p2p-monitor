@@ -239,7 +239,5 @@ def _opportunity_message(
         f"Цена P2P: {_money(offer.price)} ₽\n"
         f"Расчётная разница: +{str(spread).replace('.', ',')}%\n"
         f"Ваш порог: {str(threshold).replace('.', ',')}%\n"
-        "⚠️ Это ориентир без учёта комиссии банка, проскальзывания и изменения цены; "
-        "он не гарантирует прибыль.\n"
         f"{_offer_details(offer)}"
     )
