@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -8,7 +8,17 @@ from zoneinfo import ZoneInfo
 
 from .alerts import evaluate_percent_change, evaluate_threshold
 from .market import MarketUnavailable, select_best_buy_offer, select_best_sell_offer
-from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, QuoteSide
+from .models import (
+    SEED_ASSETS,
+    AlertKind,
+    AlertRule,
+    Asset,
+    AssetCatalogEntry,
+    MarketFilters,
+    MarketSnapshot,
+    P2PAd,
+    QuoteSide,
+)
 from .opportunities import mode_includes_side, opportunity_percent
 from .repository import Repository
 from .scheduling import schedule_is_due
@@ -29,7 +39,7 @@ class SnapshotProvider(Protocol):
 
 
 class ExchangeRateProvider(Protocol):
-    async def fetch_rub_rate(self, asset: Asset) -> Decimal: ...
+    async def fetch_rub_rate(self, asset: AssetCatalogEntry | Asset) -> Decimal: ...
 
 
 class MarketService:
@@ -37,18 +47,39 @@ class MarketService:
         self._client = client
         self._exchange_client = exchange_client
 
-    async def get_snapshots(self) -> list[MarketSnapshot]:
-        async def fetch(asset: Asset) -> MarketSnapshot:
+    async def get_snapshots(
+        self,
+        assets: Sequence[AssetCatalogEntry] | None = None,
+        filters: MarketFilters | None = None,
+    ) -> list[MarketSnapshot]:
+        assets = assets or SEED_ASSETS
+        filters = filters or MarketFilters()
+        async def fetch(entry: AssetCatalogEntry) -> MarketSnapshot:
+            buy_request = (
+                self._client.fetch_ads(entry, QuoteSide.BUY)
+                if QuoteSide.SELL in filters.directions
+                else asyncio.sleep(0, result=[])
+            )
+            sell_request = (
+                self._client.fetch_ads(entry, QuoteSide.SELL)
+                if QuoteSide.BUY in filters.directions
+                else asyncio.sleep(0, result=[])
+            )
+            exchange_request = (
+                self._fetch_exchange_rate(entry)
+                if entry.exchange_code is not None
+                else asyncio.sleep(0, result=None)
+            )
             buy_ads, sell_ads, exchange_price = await asyncio.gather(
-                self._client.fetch_ads(asset, QuoteSide.BUY),
-                self._client.fetch_ads(asset, QuoteSide.SELL),
-                self._fetch_exchange_rate(asset),
+                buy_request,
+                sell_request,
+                exchange_request,
                 return_exceptions=True,
             )
             if isinstance(buy_ads, BaseException):
                 logger.warning(
                     "Failed to fetch %s buy ads (%s)",
-                    asset.value,
+                    entry.symbol.value,
                     type(buy_ads).__name__,
                 )
                 buy_ads = []
@@ -58,7 +89,7 @@ class MarketService:
             if isinstance(sell_ads, BaseException):
                 logger.warning(
                     "Failed to fetch %s sell ads (%s)",
-                    asset.value,
+                    entry.symbol.value,
                     type(sell_ads).__name__,
                 )
                 sell_ads = []
@@ -68,20 +99,28 @@ class MarketService:
             if isinstance(exchange_price, BaseException):
                 logger.warning(
                     "Failed to fetch %s exchange rate (%s)",
-                    asset.value,
+                    entry.symbol.value,
                     type(exchange_price).__name__,
                 )
                 exchange_price = None
             try:
-                buy = select_best_buy_offer(sell_ads)
+                buy = (
+                    select_best_buy_offer(sell_ads, filters)
+                    if QuoteSide.BUY in filters.directions
+                    else None
+                )
             except MarketUnavailable:
                 buy = None
             try:
-                sell = select_best_sell_offer(buy_ads)
+                sell = (
+                    select_best_sell_offer(buy_ads, filters)
+                    if QuoteSide.SELL in filters.directions
+                    else None
+                )
             except MarketUnavailable:
                 sell = None
             return MarketSnapshot(
-                asset=asset,
+                asset=entry.symbol,
                 buy=buy,
                 sell=sell,
                 exchange_price=exchange_price,
@@ -89,15 +128,19 @@ class MarketService:
                 sell_source_available=sell_source_available,
             )
 
-        snapshots = await asyncio.gather(*(fetch(asset) for asset in Asset))
+        snapshots = await asyncio.gather(*(fetch(asset) for asset in assets))
         return list(snapshots)
 
-    async def _fetch_exchange_rate(self, asset: Asset) -> Decimal | None:
+    async def _fetch_exchange_rate(
+        self, asset: AssetCatalogEntry | Asset
+    ) -> Decimal | None:
         try:
             return await self._exchange_client.fetch_rub_rate(asset)
         except Exception as exc:
             logger.warning(
-                "Failed to fetch %s exchange rate (%s)", asset.value, type(exc).__name__
+                "Failed to fetch %s exchange rate (%s)",
+                asset.symbol.value if isinstance(asset, AssetCatalogEntry) else asset.value,
+                type(exc).__name__,
             )
             return None
 

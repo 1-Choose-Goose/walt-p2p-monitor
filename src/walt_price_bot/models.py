@@ -13,6 +13,7 @@ class Asset:
     symbol: str
 
     GRAM: ClassVar["Asset"]
+    TON: ClassVar["Asset"]
     USDT: ClassVar["Asset"]
     BTC: ClassVar["Asset"]
     NOT: ClassVar["Asset"]
@@ -33,12 +34,14 @@ class Asset:
 
 
 GRAM = Asset("GRAM")
+TON = Asset("TON")
 USDT = Asset("USDT")
 BTC = Asset("BTC")
 NOT = Asset("NOT")
 ETH = Asset("ETH")
 
 Asset.GRAM = GRAM
+Asset.TON = TON
 Asset.USDT = USDT
 Asset.BTC = BTC
 Asset.NOT = NOT
@@ -161,6 +164,16 @@ class UserPreferences:
     show_exchange_rate: bool = True
     notifications: NotificationPreferences = field(default_factory=NotificationPreferences)
     quiet_hours: QuietHours = field(default_factory=QuietHours)
+
+
+@dataclass(frozen=True, slots=True)
+class MarketFilters:
+    directions: tuple[QuoteSide, ...] = (QuoteSide.BUY, QuoteSide.SELL)
+    min_limit_from: Decimal = Decimal("500")
+    min_limit_to: Decimal | None = Decimal("2000")
+    desired_amount: Decimal | None = None
+    buy_payments: tuple[str, ...] = ("sbp", "sberbankru", "russian_banks")
+    sell_payments: tuple[str, ...] = ("any",)
 
 
 @dataclass(frozen=True, slots=True)

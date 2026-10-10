@@ -5,7 +5,7 @@ from typing import Any
 
 import aiohttp
 
-from .models import Asset
+from .models import Asset, AssetCatalogEntry
 
 COINBASE_RATES_URL = "https://api.coinbase.com/v2/exchange-rates"
 RETRYABLE_STATUSES = {429, 503}
@@ -27,7 +27,10 @@ class CoinbaseRatesClient:
         self._sleep = sleep
         self._max_attempts = max_attempts
 
-    async def fetch_rub_rate(self, asset: Asset) -> Decimal:
+    async def fetch_rub_rate(self, asset: AssetCatalogEntry | Asset) -> Decimal:
+        code = asset.exchange_code if isinstance(asset, AssetCatalogEntry) else asset.value
+        if code is None:
+            raise ExchangeRateError("exchange rate is not configured")
         timeout = aiohttp.ClientTimeout(total=10)
         last_error: Exception | None = None
         payload: object | None = None
@@ -35,7 +38,7 @@ class CoinbaseRatesClient:
             try:
                 async with self._session.get(
                     COINBASE_RATES_URL,
-                    params={"currency": asset.value},
+                    params={"currency": code},
                     headers={"accept": "application/json"},
                     timeout=timeout,
                     allow_redirects=False,
@@ -62,7 +65,7 @@ class CoinbaseRatesClient:
             if not isinstance(payload, dict):
                 raise TypeError
             data = payload["data"]
-            if data["currency"] != asset.value:
+            if data["currency"] != code:
                 raise ExchangeRateError("unexpected Coinbase currency")
             rate = Decimal(str(data["rates"]["RUB"]))
         except (KeyError, TypeError, InvalidOperation, ValueError) as exc:

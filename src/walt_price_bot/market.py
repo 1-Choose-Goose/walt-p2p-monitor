@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from .models import P2PAd, QuoteSide
+from .models import MarketFilters, P2PAd, QuoteSide
 
 MIN_PURCHASE_LIMIT = 500
 MAX_PURCHASE_LIMIT = 2000
@@ -27,15 +27,18 @@ class MarketUnavailable(RuntimeError):
     pass
 
 
-def select_best_buy_offer(ads: Iterable[P2PAd]) -> P2PAd:
+def select_best_buy_offer(
+    ads: Iterable[P2PAd], filters: MarketFilters | None = None
+) -> P2PAd:
+    filters = filters or MarketFilters()
     eligible = [
         ad
         for ad in ads
         if ad.is_online
         and ad.side is QuoteSide.SELL
         and _has_valid_values(ad)
-        and MIN_PURCHASE_LIMIT <= ad.min_amount <= MAX_PURCHASE_LIMIT
-        and _supports_allowed_purchase_payment(ad)
+        and _matches_limits(ad, filters)
+        and _supports_payments(ad, filters.buy_payments)
     ]
     if not eligible:
         raise MarketUnavailable("no online sell offers")
@@ -45,6 +48,26 @@ def select_best_buy_offer(ads: Iterable[P2PAd]) -> P2PAd:
 def _supports_allowed_purchase_payment(ad: P2PAd) -> bool:
     payments = {payment.lower() for payment in ad.payments}
     return bool(payments & ALLOWED_PURCHASE_PAYMENTS)
+
+
+def _supports_payments(ad: P2PAd, configured: tuple[str, ...]) -> bool:
+    if "any" in configured:
+        return True
+    payments = {payment.lower() for payment in ad.payments}
+    allowed = {payment.lower() for payment in configured}
+    if "russian_banks" in allowed:
+        allowed |= ALLOWED_PURCHASE_PAYMENTS
+    return bool(payments & allowed)
+
+
+def _matches_limits(ad: P2PAd, filters: MarketFilters) -> bool:
+    if ad.min_amount < filters.min_limit_from:
+        return False
+    if filters.min_limit_to is not None and ad.min_amount > filters.min_limit_to:
+        return False
+    return filters.desired_amount is None or (
+        ad.min_amount <= filters.desired_amount <= ad.max_amount
+    )
 
 
 def _has_valid_values(ad: P2PAd) -> bool:
@@ -58,14 +81,18 @@ def _has_valid_values(ad: P2PAd) -> bool:
     )
 
 
-def select_best_sell_offer(ads: Iterable[P2PAd]) -> P2PAd:
+def select_best_sell_offer(
+    ads: Iterable[P2PAd], filters: MarketFilters | None = None
+) -> P2PAd:
+    filters = filters or MarketFilters()
     eligible = [
         ad
         for ad in ads
         if ad.is_online
         and ad.side is QuoteSide.BUY
         and _has_valid_values(ad)
-        and MIN_PURCHASE_LIMIT <= ad.min_amount <= MAX_PURCHASE_LIMIT
+        and _matches_limits(ad, filters)
+        and _supports_payments(ad, filters.sell_payments)
     ]
     if not eligible:
         raise MarketUnavailable("no online buy offers")

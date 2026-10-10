@@ -91,20 +91,27 @@ class WaltClient:
         self._max_attempts = max_attempts
         self._max_pages = max_pages
 
-    async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
+    async def fetch_ads(
+        self, asset: AssetCatalogEntry | Asset, side: QuoteSide
+    ) -> list[P2PAd]:
+        entry = (
+            asset
+            if isinstance(asset, AssetCatalogEntry)
+            else AssetCatalogEntry(asset, asset.value, asset.value)
+        )
         ads: list[P2PAd] = []
         for page in range(1, self._max_pages + 1):
-            page_ads = await self._fetch_page(asset, side, page)
+            page_ads = await self._fetch_page(entry, side, page)
             ads.extend(page_ads)
             if len(page_ads) < 50:
                 break
         return ads
 
     async def _fetch_page(
-        self, asset: Asset, side: QuoteSide, page: int
+        self, asset: AssetCatalogEntry, side: QuoteSide, page: int
     ) -> list[P2PAd]:
         payload = {
-            "cryptoCurrency": asset.value,
+            "cryptoCurrency": asset.walt_code,
             "fiatCurrency": "RUB",
             "side": side.value,
             "page": page,
@@ -138,7 +145,9 @@ class WaltClient:
         raise WaltAPIError("Walt API temporarily unavailable") from last_error
 
     @staticmethod
-    def _parse_response(payload: object, asset: Asset, side: QuoteSide) -> list[P2PAd]:
+    def _parse_response(
+        payload: object, asset: AssetCatalogEntry, side: QuoteSide
+    ) -> list[P2PAd]:
         if not isinstance(payload, dict) or payload.get("status") != "SUCCESS":
             raise WaltAPIError("invalid Walt response status")
         data = payload.get("data")
@@ -147,10 +156,12 @@ class WaltClient:
         return [WaltClient._parse_ad(item, asset, side) for item in data]
 
     @staticmethod
-    def _parse_ad(item: object, asset: Asset, side: QuoteSide) -> P2PAd:
+    def _parse_ad(
+        item: object, asset: AssetCatalogEntry, side: QuoteSide
+    ) -> P2PAd:
         if not isinstance(item, dict):
             raise WaltAPIError("invalid Walt ad")
-        if item.get("cryptoCurrency") != asset.value:
+        if item.get("cryptoCurrency") != asset.walt_code:
             raise WaltAPIError("unexpected asset in Walt response")
         if item.get("fiatCurrency") != "RUB":
             raise WaltAPIError("unexpected fiat currency in Walt response")
@@ -187,7 +198,7 @@ class WaltClient:
             id=identifier,
             user_id=user_id,
             nickname=nickname,
-            asset=asset,
+            asset=asset.symbol,
             side=side,
             price=price,
             min_amount=min_amount,
