@@ -137,6 +137,7 @@ def test_notification_actions_are_grouped_and_markup_is_user_selectable() -> Non
     ]
     callbacks = {button.callback_data for button in buttons}
     assert {"menu:opportunity", "menu:alert", "menu:change", "menu:schedule"} <= callbacks
+    assert "settings:notifications:" in callbacks
     assert "menu:pause" in callbacks
     threshold_texts = [
         button.text

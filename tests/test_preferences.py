@@ -10,8 +10,10 @@ from walt_price_bot.preferences import (
     SettingsAction,
     SettingsCallback,
     format_preferences,
+    notification_categories_keyboard,
     parse_money,
     return_to_main_menu,
+    settings_keyboard,
     show_quiet_hours,
     summary_interval_minutes,
     toggle_asset,
@@ -90,6 +92,31 @@ def test_typed_settings_callback_round_trip() -> None:
     unpacked = SettingsCallback.unpack(packed)
     assert unpacked.action is SettingsAction.LIMIT
     assert unpacked.value == "2000"
+
+
+def test_settings_do_not_duplicate_notifications_section() -> None:
+    callbacks = {
+        button.callback_data
+        for row in settings_keyboard().inline_keyboard
+        for button in row
+    }
+
+    assert "settings:notifications:" not in callbacks
+
+
+@pytest.mark.asyncio
+async def test_notification_categories_show_state_and_return_to_notification_hub(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
+
+    keyboard = notification_categories_keyboard(preferences)
+    buttons = [button for row in keyboard.inline_keyboard for button in row]
+
+    assert buttons[0].text.startswith("✅ ")
+    assert buttons[-1].callback_data == "menu:notifications"
 
 
 @pytest.mark.asyncio

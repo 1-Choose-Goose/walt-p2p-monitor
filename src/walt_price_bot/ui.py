@@ -220,6 +220,12 @@ def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="⚙️ Категории уведомлений",
+                    callback_data="settings:notifications:",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="▶️ Возобновить" if paused else "⏸ Приостановить",
                     callback_data="menu:resume" if paused else "menu:pause",
                 )

@@ -116,6 +116,24 @@ async def test_preferences_assets_sessions_and_credentials_are_isolated(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_selected_assets_survive_restart_and_profile_refresh(tmp_path: Path) -> None:
+    database = tmp_path / "bot.db"
+    repository = Repository(database)
+    await repository.initialize()
+    await repository.create_or_refresh_request(
+        101, phone="+79990000001", first_name="Иван", username=None
+    )
+    await repository.replace_user_assets(101, (Asset.USDT, Asset.ETH))
+
+    await Repository(database).initialize()
+    await repository.create_or_refresh_request(
+        101, phone="+79990000001", first_name="Иван", username=None
+    )
+
+    assert await repository.get_user_assets(101) == (Asset.USDT, Asset.ETH)
+
+
+@pytest.mark.asyncio
 async def test_delete_user_cascades_and_stale_lookup_is_safe(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()

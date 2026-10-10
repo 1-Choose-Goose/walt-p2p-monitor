@@ -149,10 +149,9 @@ def settings_keyboard(paused: bool = False) -> InlineKeyboardMarkup:
             ],
             [
                 button("⏱ Интервалы", SettingsAction.INTERVAL),
-                button("🔔 Уведомления", SettingsAction.NOTIFICATIONS),
+                button("🌙 Тихие часы", SettingsAction.QUIET),
             ],
             [
-                button("🌙 Тихие часы", SettingsAction.QUIET),
                 button("🏦 Биржевой курс", SettingsAction.EXCHANGE),
             ],
             [
@@ -186,6 +185,33 @@ def _choice_keyboard(
                 callback_data=SettingsCallback(action=SettingsAction.OPEN).pack(),
             )
         ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def notification_categories_keyboard(
+    preferences: UserPreferences,
+) -> InlineKeyboardMarkup:
+    choices = [
+        ("Ценовые пороги", "threshold", preferences.notifications.threshold),
+        ("Изменения цены", "percent", preferences.notifications.percent),
+        ("Сводки", "scheduled", preferences.notifications.scheduled),
+        ("Выгодные лоты", "opportunity", preferences.notifications.opportunity),
+    ]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{'✅' if enabled else '☐'} {label}",
+                callback_data=SettingsCallback(
+                    action=SettingsAction.NOTIFICATION_TOGGLE,
+                    value=value,
+                ).pack(),
+            )
+        ]
+        for label, value, enabled in choices
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="Назад", callback_data="menu:notifications")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -366,13 +392,8 @@ def build_preferences_router(repository: Repository) -> Router:
         elif action is SettingsAction.NOTIFICATIONS and callback.message:
             await callback.message.edit_text(
                 "🔔 <b>Категории уведомлений</b>",
-                reply_markup=_choice_keyboard(
-                    [
-                        ("Ценовые пороги", SettingsAction.NOTIFICATION_TOGGLE, "threshold"),
-                        ("Изменения цены", SettingsAction.NOTIFICATION_TOGGLE, "percent"),
-                        ("Сводки", SettingsAction.NOTIFICATION_TOGGLE, "scheduled"),
-                        ("Выгодные лоты", SettingsAction.NOTIFICATION_TOGGLE, "opportunity"),
-                    ]
+                reply_markup=notification_categories_keyboard(
+                    await repository.get_preferences(telegram_id)
                 ),
             )
             await callback.answer()
@@ -388,6 +409,12 @@ def build_preferences_router(repository: Repository) -> Router:
             await repository.update_preferences(
                 telegram_id, **{f"notify_{field}": not values[field]}
             )
+            if callback.message:
+                await callback.message.edit_reply_markup(
+                    reply_markup=notification_categories_keyboard(
+                        await repository.get_preferences(telegram_id)
+                    )
+                )
             await callback.answer("Сохранено")
         elif action is SettingsAction.QUIET:
             await show_quiet_hours(callback)

@@ -198,8 +198,11 @@ async def _ensure_user_defaults(db: aiosqlite.Connection, telegram_id: int) -> N
         """
         INSERT OR IGNORE INTO user_assets(telegram_id, symbol)
         SELECT ?, symbol FROM asset_catalog WHERE active = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM user_assets WHERE telegram_id = ?
+          )
         """,
-        (telegram_id,),
+        (telegram_id, telegram_id),
     )
 
 
