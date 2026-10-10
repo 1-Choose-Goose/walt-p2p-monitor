@@ -137,17 +137,26 @@ class Repository:
         *,
         expected: AccessStatus,
         new_status: AccessStatus,
+        expected_version: int | None = None,
     ) -> User:
         if telegram_id == ADMIN_TELEGRAM_ID:
             raise InvalidUserTransitionError("administrator status is immutable")
         async with self.user_lock(telegram_id), self._connect() as db:
+            version_clause = " AND version = ?" if expected_version is not None else ""
+            params: tuple[object, ...] = (
+                new_status.value,
+                telegram_id,
+                expected.value,
+                *((expected_version,) if expected_version is not None else ()),
+            )
             cursor = await db.execute(
                 """
                 UPDATE users SET status = ?, version = version + 1,
                                  updated_at = CURRENT_TIMESTAMP
                 WHERE telegram_id = ? AND status = ?
-                """,
-                (new_status.value, telegram_id, expected.value),
+                """
+                + version_clause,
+                params,
             )
             if cursor.rowcount != 1:
                 await db.rollback()
@@ -160,21 +169,34 @@ class Repository:
             raise InvalidUserTransitionError("user does not exist")
         return self._user_from_row(row)
 
-    async def set_user_role(self, telegram_id: int, role: UserRole) -> User:
+    async def set_user_role(
+        self,
+        telegram_id: int,
+        role: UserRole,
+        *,
+        expected_version: int | None = None,
+    ) -> User:
         if telegram_id == ADMIN_TELEGRAM_ID or role is UserRole.ADMIN:
             raise InvalidUserTransitionError("administrator role is immutable")
         async with self._connect() as db:
+            version_clause = " AND version = ?" if expected_version is not None else ""
+            params: tuple[object, ...] = (
+                role.value,
+                telegram_id,
+                *((expected_version,) if expected_version is not None else ()),
+            )
             cursor = await db.execute(
                 """
                 UPDATE users SET role = ?, version = version + 1,
                                  updated_at = CURRENT_TIMESTAMP
                 WHERE telegram_id = ?
-                """,
-                (role.value, telegram_id),
+                """
+                + version_clause,
+                params,
             )
             if cursor.rowcount != 1:
                 await db.rollback()
-                raise InvalidUserTransitionError("user does not exist")
+                raise InvalidUserTransitionError("user state has changed")
             await db.commit()
             row = await (
                 await db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -765,6 +787,7 @@ class Repository:
             status=AccessStatus(row["status"]),
             first_name=row["first_name"],
             username=row["username"],
+            version=row["version"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

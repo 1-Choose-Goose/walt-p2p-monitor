@@ -5,7 +5,6 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import ClassVar
 
-
 _TICKER_PATTERN = re.compile(r"[A-Z0-9]{1,16}\Z")
 
 
@@ -124,6 +123,7 @@ class User:
     status: AccessStatus
     first_name: str | None = None
     username: str | None = None
+    version: int = 0
     created_at: str | None = None
     updated_at: str | None = None
 
