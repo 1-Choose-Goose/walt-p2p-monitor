@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from walt_price_bot.main import default_bot_properties
 from walt_price_bot.messaging import (
     DeleteIncomingMessagesMiddleware,
     ReplacingSender,
@@ -22,6 +23,12 @@ async def test_incoming_user_message_is_deleted_after_handling() -> None:
 
     assert result == "готово"
     event.delete.assert_awaited_once()
+
+
+def test_telegram_link_previews_are_disabled() -> None:
+    properties = default_bot_properties()
+
+    assert properties.link_preview_is_disabled is True
 
 
 @pytest.mark.asyncio

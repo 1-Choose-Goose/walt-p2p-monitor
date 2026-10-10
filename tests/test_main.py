@@ -96,7 +96,7 @@ async def test_bot_profile_has_russian_pre_start_greeting() -> None:
     assert "P2P-предложениями Walt" in bot.description
     assert "биржевым курсом" in bot.description
     assert "выгодных" in bot.description.lower()
-    assert "/start" not in bot.description
+    assert "/start — открыть главное меню" in bot.description
 
 
 @pytest.mark.asyncio

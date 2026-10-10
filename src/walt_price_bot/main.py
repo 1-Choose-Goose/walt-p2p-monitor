@@ -29,8 +29,15 @@ BOT_SHORT_DESCRIPTION = "Лучшие P2P-цены Walt в рублях."
 BOT_DESCRIPTION = (
     "Следит за P2P-предложениями Walt, сравнивает их с биржевым курсом и сообщает "
     "о выгодных ценах. Монеты, суммы, способы оплаты и уведомления настраиваются "
-    "индивидуально."
+    "индивидуально.\n\n/start — открыть главное меню."
 )
+
+
+def default_bot_properties() -> DefaultBotProperties:
+    return DefaultBotProperties(
+        parse_mode=ParseMode.HTML,
+        link_preview_is_disabled=True,
+    )
 
 
 async def set_commands_best_effort(bot: Bot) -> None:
@@ -96,7 +103,7 @@ async def run() -> None:
 
     bot = Bot(
         token=settings.telegram_bot_token.get_secret_value(),
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        default=default_bot_properties(),
     )
     try:
         dispatcher = Dispatcher(storage=SQLiteFSMStorage(repository))
