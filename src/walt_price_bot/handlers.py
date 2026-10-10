@@ -8,7 +8,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from .keyboards import NOTIFICATIONS_BUTTON, PRICES_BUTTON, main_navigation_keyboard
+from .keyboards import (
+    MAIN_MENU_BUTTON,
+    NOTIFICATIONS_BUTTON,
+    PRICES_BUTTON,
+    main_navigation_keyboard,
+)
 from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import (
     AccessStatus,
@@ -152,6 +157,21 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
     async def start(message: Message, state: FSMContext) -> None:
         await state.clear()
         await handle_start(message, repository)
+
+    @router.message(F.text == MAIN_MENU_BUTTON)
+    async def main_menu_button(message: Message, state: FSMContext) -> None:
+        if not await owner_required(message, repository):
+            return
+        await state.clear()
+        account = await repository.get_user(message.from_user.id)
+        await replace_message(
+            message,
+            repository,
+            WELCOME,
+            reply_markup=main_menu_keyboard(
+                account.role, await repository.is_paused(message.from_user.id)
+            ),
+        )
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
