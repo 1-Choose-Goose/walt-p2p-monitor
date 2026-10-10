@@ -22,13 +22,17 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, response: FakeResponse) -> None:
-        self.response = response
+    def __init__(self, response: FakeResponse | list[FakeResponse]) -> None:
+        self.responses = response if isinstance(response, list) else [response]
         self.calls: list[dict[str, object]] = []
 
     def get(self, url: str, **kwargs: object) -> FakeResponse:
         self.calls.append({"url": url, **kwargs})
-        return self.response
+        return self.responses.pop(0)
+
+
+async def no_sleep(_: float) -> None:
+    return None
 
 
 @pytest.mark.asyncio
@@ -55,3 +59,35 @@ async def test_coinbase_client_rejects_invalid_rate() -> None:
 
     with pytest.raises(ExchangeRateError, match="invalid Coinbase rate"):
         await CoinbaseRatesClient(session=session).fetch_rub_rate(Asset.BTC)
+
+
+@pytest.mark.asyncio
+async def test_coinbase_retries_only_bounded_temporary_statuses() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(503, {}),
+            FakeResponse(
+                200,
+                {"data": {"currency": "USDT", "rates": {"RUB": "85.1"}}},
+            ),
+        ]
+    )
+
+    rate = await CoinbaseRatesClient(session=session, sleep=no_sleep).fetch_rub_rate(
+        Asset.USDT
+    )
+
+    assert rate == Decimal("85.1")
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_coinbase_does_not_retry_authentication_error() -> None:
+    session = FakeSession(FakeResponse(401, {}))
+
+    with pytest.raises(ExchangeRateError, match="HTTP 401"):
+        await CoinbaseRatesClient(session=session, sleep=no_sleep).fetch_rub_rate(
+            Asset.USDT
+        )
+
+    assert len(session.calls) == 1

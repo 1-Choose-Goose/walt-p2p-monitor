@@ -1,3 +1,4 @@
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 
@@ -57,17 +58,28 @@ CREATE TABLE IF NOT EXISTS opportunity_notifications (
     last_ad_id TEXT NOT NULL,
     PRIMARY KEY (asset, quote_side)
 );
+CREATE TABLE IF NOT EXISTS opportunity_notification_history (
+    asset TEXT NOT NULL CHECK (asset IN ('USDT', 'TON', 'BTC')),
+    quote_side TEXT NOT NULL CHECK (quote_side IN ('BUY', 'SELL')),
+    ad_id TEXT NOT NULL,
+    notified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (asset, quote_side, ad_id)
+);
 """
 
 
 class Repository:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
+        self.opportunity_delivery_lock = asyncio.Lock()
+        self.message_delivery_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as db:
+            await db.execute("PRAGMA busy_timeout=5000")
             await db.executescript(SCHEMA)
+            await db.execute("BEGIN IMMEDIATE")
             columns = {
                 row[1] for row in await (await db.execute("PRAGMA table_info(settings)")).fetchall()
             }
@@ -77,9 +89,9 @@ class Repository:
                 db, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'alerts'"
             )
             if alerts_sql is not None and "'BTC'" not in alerts_sql:
-                await db.executescript(
+                await db.execute("ALTER TABLE alerts RENAME TO alerts_legacy")
+                await db.execute(
                     """
-                    ALTER TABLE alerts RENAME TO alerts_legacy;
                     CREATE TABLE alerts (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         kind TEXT NOT NULL CHECK (kind IN ('threshold', 'percent')),
@@ -90,16 +102,25 @@ class Repository:
                         baseline TEXT,
                         armed INTEGER NOT NULL DEFAULT 1 CHECK (armed IN (0, 1)),
                         enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
-                    );
+                    )
+                    """
+                )
+                await db.execute(
+                    """
                     INSERT INTO alerts
                         (id, kind, asset, quote_side, threshold_direction, target,
                          baseline, armed, enabled)
                     SELECT id, kind, asset, quote_side, threshold_direction, target,
                            baseline, armed, enabled
-                    FROM alerts_legacy;
-                    DROP TABLE alerts_legacy;
+                    FROM alerts_legacy
                     """
                 )
+                await db.execute("DROP TABLE alerts_legacy")
+            await db.execute(
+                "INSERT OR IGNORE INTO opportunity_notification_history"
+                "(asset, quote_side, ad_id) "
+                "SELECT asset, quote_side, last_ad_id FROM opportunity_notifications"
+            )
             await db.commit()
 
     async def claim_owner(self, telegram_id: int) -> bool:
@@ -120,11 +141,19 @@ class Repository:
         if telegram_id <= 0:
             raise ValueError("telegram_id must be positive")
         async with aiosqlite.connect(self.path) as db:
-            await db.execute(
+            cursor = await db.execute(
                 "UPDATE settings SET owner_id = ? WHERE singleton = 1 AND owner_id IS NULL",
                 (telegram_id,),
             )
             await db.commit()
+            if cursor.rowcount == 0:
+                current = await self._scalar(
+                    db, "SELECT owner_id FROM settings WHERE singleton = 1"
+                )
+                if current != telegram_id:
+                    raise RuntimeError(
+                        "configured owner conflicts with persisted database owner"
+                    )
 
     async def get_owner_id(self) -> int | None:
         async with aiosqlite.connect(self.path) as db:
@@ -311,6 +340,7 @@ class Repository:
                 (mode.value, str(min_spread_percent)),
             )
             await db.execute("DELETE FROM opportunity_notifications")
+            await db.execute("DELETE FROM opportunity_notification_history")
             await db.commit()
 
     async def disable_opportunities(self) -> None:
@@ -331,15 +361,46 @@ class Repository:
             ).fetchone()
         return row[0] if row else None
 
+    async def was_opportunity_notified(
+        self, asset: Asset, side: QuoteSide, ad_id: str
+    ) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            row = await (
+                await db.execute(
+                    "SELECT 1 FROM opportunity_notification_history "
+                    "WHERE asset = ? AND quote_side = ? AND ad_id = ?",
+                    (asset.value, side.value, ad_id),
+                )
+            ).fetchone()
+        return row is not None
+
     async def mark_opportunity_notified(
         self, asset: Asset, side: QuoteSide, ad_id: str
     ) -> None:
+        await self.mark_opportunities_notified([(asset, side, ad_id)])
+
+    async def mark_opportunities_notified(
+        self, notifications: list[tuple[Asset, QuoteSide, str]]
+    ) -> None:
+        if not notifications:
+            return
         async with aiosqlite.connect(self.path) as db:
-            await db.execute(
+            await db.executemany(
+                "INSERT OR IGNORE INTO opportunity_notification_history"
+                "(asset, quote_side, ad_id) VALUES (?, ?, ?)",
+                [
+                    (asset.value, side.value, ad_id)
+                    for asset, side, ad_id in notifications
+                ],
+            )
+            await db.executemany(
                 "INSERT INTO opportunity_notifications(asset, quote_side, last_ad_id) "
                 "VALUES (?, ?, ?) "
                 "ON CONFLICT(asset, quote_side) DO UPDATE SET last_ad_id = excluded.last_ad_id",
-                (asset.value, side.value, ad_id),
+                [
+                    (asset.value, side.value, ad_id)
+                    for asset, side, ad_id in notifications
+                ],
             )
             await db.commit()
 

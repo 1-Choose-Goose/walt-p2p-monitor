@@ -3,8 +3,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
-from walt_price_bot.handlers import handle_start, owner_required
+from walt_price_bot.handlers import _callback_message, handle_start, owner_required
 from walt_price_bot.repository import Repository
 
 
@@ -33,3 +34,47 @@ async def test_other_user_is_denied_without_leaking_data(tmp_path: Path) -> None
 
     assert allowed is False
     assert message.answer.await_args.args == ("⛔ Этот бот доступен только владельцу.",)
+
+
+@pytest.mark.asyncio
+async def test_repeated_callback_ignores_message_not_modified(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    callback = SimpleNamespace(
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            edit_text=AsyncMock(
+                side_effect=TelegramBadRequest(
+                    method=object(), message="Bad Request: message is not modified"
+                )
+            ),
+            answer=AsyncMock(),
+        ),
+    )
+
+    await _callback_message(callback, repository, "Меню")
+
+    callback.answer.assert_awaited_once()
+    callback.message.answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_callback_restores_current_message(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    callback = SimpleNamespace(
+        answer=AsyncMock(),
+        message=SimpleNamespace(
+            edit_text=AsyncMock(
+                side_effect=TelegramBadRequest(
+                    method=object(), message="Bad Request: message to edit not found"
+                )
+            ),
+            answer=AsyncMock(return_value=SimpleNamespace(message_id=99)),
+        ),
+    )
+
+    await _callback_message(callback, repository, "Меню")
+
+    callback.message.answer.assert_awaited_once()
+    assert await repository.get_last_message_id() == 99

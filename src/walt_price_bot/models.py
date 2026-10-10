@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -57,6 +58,9 @@ class MarketSnapshot:
     buy: P2PAd | None
     sell: P2PAd | None
     exchange_price: Decimal | None = None
+    buy_source_available: bool = True
+    sell_source_available: bool = True
+    captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass(frozen=True, slots=True)

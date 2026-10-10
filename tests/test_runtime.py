@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,9 +19,11 @@ from walt_price_bot.repository import Repository
 from walt_price_bot.runtime import MarketService, run_monitor_cycle
 
 
-def ad(asset: Asset, side: QuoteSide, price: str) -> P2PAd:
+def ad(
+    asset: Asset, side: QuoteSide, price: str, *, identifier: str | None = None
+) -> P2PAd:
     return P2PAd(
-        id=f"{asset}-{side}",
+        id=identifier or f"{asset}-{side}",
         user_id="67890",
         nickname="maker",
         asset=asset,
@@ -57,9 +60,21 @@ class FakeExchangeClient:
         }[asset]
 
 
+class FailingExchangeClient:
+    async def fetch_rub_rate(self, asset: Asset) -> Decimal:
+        raise RuntimeError(f"{asset.value} unavailable")
+
+
 class EmptyWaltClient:
     async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
         return []
+
+
+class PartiallyFailingWaltClient(FakeWaltClient):
+    async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
+        if asset is Asset.BTC:
+            raise RuntimeError("BTC unavailable")
+        return await super().fetch_ads(asset, side)
 
 
 class FakeProvider:
@@ -127,6 +142,41 @@ async def test_market_service_keeps_exchange_rates_when_p2p_offers_are_unavailab
     assert len(snapshots) == 3
     assert all(snapshot.buy is None and snapshot.sell is None for snapshot in snapshots)
     assert all(snapshot.exchange_price is not None for snapshot in snapshots)
+
+
+@pytest.mark.asyncio
+async def test_market_service_isolates_one_asset_failure() -> None:
+    snapshots = await MarketService(
+        PartiallyFailingWaltClient(), FakeExchangeClient()
+    ).get_snapshots()
+
+    by_asset = {snapshot.asset: snapshot for snapshot in snapshots}
+    assert by_asset[Asset.USDT].buy is not None
+    assert by_asset[Asset.TON].sell is not None
+    assert by_asset[Asset.BTC].buy is None
+    assert by_asset[Asset.BTC].sell is None
+    assert by_asset[Asset.BTC].exchange_price is not None
+    assert by_asset[Asset.BTC].buy_source_available is False
+    assert by_asset[Asset.BTC].sell_source_available is False
+
+
+@pytest.mark.asyncio
+async def test_coinbase_failure_keeps_walt_without_opportunity_signal(
+    tmp_path: Path,
+) -> None:
+    provider = MarketService(FakeWaltClient(), FailingExchangeClient())
+    snapshots = await provider.get_snapshots()
+    assert all(snapshot.buy is not None for snapshot in snapshots)
+    assert all(snapshot.exchange_price is None for snapshot in snapshots)
+
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BOTH,
+        min_spread_percent=Decimal("0.5"),
+    )
+    sender = FakeSender()
+    await run_monitor_cycle(repository, provider, sender, datetime.now(UTC))
+    assert sender.messages == []
 
 
 async def prepared_repository(path: Path) -> Repository:
@@ -273,3 +323,83 @@ async def test_multiple_opportunities_are_delivered_in_one_message(tmp_path: Pat
     assert len(sender.messages) == 1
     assert "покупка USDT" in sender.messages[0][1]
     assert "продажа USDT" in sender.messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_opportunity_history_prevents_a_b_a_repeat(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    provider = FakeProvider()
+    sender = FakeSender()
+    now = datetime.now(UTC)
+
+    provider.snapshots[0] = MarketSnapshot(
+        asset=Asset.USDT,
+        buy=ad(Asset.USDT, QuoteSide.SELL, "89.00", identifier="offer-a"),
+        sell=None,
+        exchange_price=Decimal("90.00"),
+    )
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    provider.snapshots[0] = MarketSnapshot(
+        asset=Asset.USDT,
+        buy=ad(Asset.USDT, QuoteSide.SELL, "88.00", identifier="offer-b"),
+        sell=None,
+        exchange_price=Decimal("90.00"),
+    )
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    provider.snapshots[0] = MarketSnapshot(
+        asset=Asset.USDT,
+        buy=ad(Asset.USDT, QuoteSide.SELL, "89.00", identifier="offer-a"),
+        sell=None,
+        exchange_price=Decimal("90.00"),
+    )
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    assert len(sender.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cycles_send_opportunity_once(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    sender = FakeSender()
+    now = datetime.now(UTC)
+
+    await asyncio.gather(
+        run_monitor_cycle(repository, FakeProvider(), sender, now),
+        run_monitor_cycle(repository, FakeProvider(), sender, now),
+    )
+
+    assert len(sender.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_snapshot_does_not_create_signal(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    provider = FakeProvider()
+    now = datetime.now(UTC)
+    current = provider.snapshots[0]
+    provider.snapshots[0] = MarketSnapshot(
+        asset=current.asset,
+        buy=current.buy,
+        sell=current.sell,
+        exchange_price=current.exchange_price,
+        captured_at=now - timedelta(minutes=6),
+    )
+    sender = FakeSender()
+
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    assert sender.messages == []

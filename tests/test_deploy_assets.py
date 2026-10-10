@@ -24,6 +24,7 @@ def test_environment_template_contains_only_placeholders() -> None:
     assert "replace-with-bot-token" in text
     assert "replace-with-walt-api-key" in text
     assert "p2p.walletbot.me" not in text
+    assert "DATABASE_PATH=/var/lib/walt-price-bot/walt-price-bot.db" in text
 
 
 def test_installer_force_reinstalls_updated_application_package() -> None:
@@ -33,3 +34,5 @@ def test_installer_force_reinstalls_updated_application_package() -> None:
     assert 'rm -rf "${app_dir}/build" "${app_dir}/src"' in text
     assert 'cp -a "${source_dir}/src" "${app_dir}/src"' in text
     assert "-name '*.egg-info' -exec rm -rf" in text
+    assert 'cp -a -- "${database_file}" "${backup_file}"' in text
+    assert "systemctl stop walt-price-bot.service" in text

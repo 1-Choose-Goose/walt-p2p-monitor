@@ -13,6 +13,7 @@ def ad(
     *,
     online: bool = True,
     min_amount: str = "1000",
+    max_amount: str = "50000",
     payments: tuple[str, ...] = ("sbp",),
 ) -> P2PAd:
     return P2PAd(
@@ -23,7 +24,7 @@ def ad(
         side=side,
         price=Decimal(price),
         min_amount=Decimal(min_amount),
-        max_amount=Decimal("50000"),
+        max_amount=Decimal(max_amount),
         payments=payments,
         rating=Decimal("0.99"),
         is_online=online,
@@ -88,3 +89,29 @@ def test_sell_offer_requires_minimum_limit_between_500_and_2000_rubles() -> None
 def test_empty_market_is_not_a_zero_price() -> None:
     with pytest.raises(MarketUnavailable):
         select_best_buy_offer([])
+
+
+@pytest.mark.parametrize(
+    ("price", "min_amount", "max_amount"),
+    [
+        ("NaN", "1000", "50000"),
+        ("Infinity", "1000", "50000"),
+        ("0", "1000", "50000"),
+        ("-1", "1000", "50000"),
+        ("90", "NaN", "50000"),
+        ("90", "2000", "1000"),
+    ],
+)
+def test_market_selection_excludes_invalid_ads(
+    price: str, min_amount: str, max_amount: str
+) -> None:
+    invalid = ad(
+        "invalid",
+        QuoteSide.SELL,
+        price,
+        min_amount=min_amount,
+        max_amount=max_amount,
+    )
+
+    with pytest.raises(MarketUnavailable):
+        select_best_buy_offer([invalid])

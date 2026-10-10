@@ -112,3 +112,46 @@ async def test_fetch_ads_does_not_retry_bad_request() -> None:
         await client.fetch_ads(Asset.USDT, QuoteSide.SELL)
 
     assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("price", "NaN"),
+        ("price", "Infinity"),
+        ("price", "0"),
+        ("price", "-1"),
+        ("minAmount", "NaN"),
+        ("maxAmount", "Infinity"),
+        ("minAmount", "2000"),
+    ],
+)
+async def test_fetch_ads_rejects_invalid_numeric_values(field: str, value: str) -> None:
+    item = dict(VALID_AD, **{field: value})
+    if field == "minAmount" and value == "2000":
+        item["maxAmount"] = "1000"
+    session = FakeSession([FakeResponse(200, {"status": "SUCCESS", "data": [item]})])
+    client = WaltClient(session=session, api_key="secret-key", sleep=no_sleep)
+
+    with pytest.raises(WaltAPIError, match="invalid"):
+        await client.fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+
+@pytest.mark.asyncio
+async def test_fetch_ads_uses_bounded_pagination() -> None:
+    first_page = [dict(VALID_AD, id=str(index)) for index in range(50)]
+    second_page = [dict(VALID_AD, id="last")]
+    session = FakeSession(
+        [
+            FakeResponse(200, {"status": "SUCCESS", "data": first_page}),
+            FakeResponse(200, {"status": "SUCCESS", "data": second_page}),
+        ]
+    )
+
+    ads = await WaltClient(
+        session=session, api_key="secret-key", sleep=no_sleep
+    ).fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+    assert len(ads) == 51
+    assert [call["json"]["page"] for call in session.calls] == [1, 2]

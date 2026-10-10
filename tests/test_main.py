@@ -67,6 +67,19 @@ async def test_command_menu_includes_start_as_main_menu() -> None:
         command.command == "deals" and command.description == "Выгодные лоты"
         for command in bot.commands
     )
+    assert {command.command for command in bot.commands} == {
+        "start",
+        "price",
+        "deals",
+        "alert",
+        "change",
+        "schedule",
+        "alerts",
+        "delete",
+        "pause",
+        "resume",
+        "help",
+    }
 
 
 @pytest.mark.asyncio
@@ -75,7 +88,7 @@ async def test_bot_profile_has_russian_pre_start_greeting() -> None:
 
     await set_profile_best_effort(bot)
 
-    assert bot.short_description == "Мониторинг лучших P2P-цен Walt в рублях."
+    assert bot.short_description == "Мониторинг P2P-цен Walt в рублях."
     assert bot.description is not None
     assert "USDT, TON и BTC" in bot.description
     assert "Coinbase" in bot.description

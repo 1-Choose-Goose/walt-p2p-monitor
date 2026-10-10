@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -109,6 +110,13 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
     router = Router(name=__name__)
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
+    async def update_callback(
+        callback: CallbackQuery, text: str, reply_markup: Any | None = None
+    ) -> None:
+        await _callback_message(
+            callback, repository, text, reply_markup=reply_markup
+        )
+
     @router.message(Command("start"))
     async def start(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -201,7 +209,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(asset=callback.data.rsplit(":", 1)[1])
         await state.set_state(AlertFlow.side)
-        await _callback_message(callback, "Какую цену отслеживать?", side_keyboard("alert"))
+        await update_callback(callback, "Какую цену отслеживать?", side_keyboard("alert"))
 
     @router.callback_query(AlertFlow.side, F.data.startswith("alert:side:"))
     async def alert_side(callback: CallbackQuery, state: FSMContext) -> None:
@@ -209,7 +217,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(side=callback.data.rsplit(":", 1)[1])
         await state.set_state(AlertFlow.direction)
-        await _callback_message(callback, "Когда уведомить?", direction_keyboard())
+        await update_callback(callback, "Когда уведомить?", direction_keyboard())
 
     @router.callback_query(AlertFlow.direction, F.data.startswith("alert:direction:"))
     async def alert_direction(callback: CallbackQuery, state: FSMContext) -> None:
@@ -217,7 +225,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(direction=callback.data.rsplit(":", 1)[1])
         await state.set_state(AlertFlow.target)
-        await _callback_message(
+        await update_callback(
             callback, "Введите цену в рублях, например 90,50:", back_keyboard()
         )
 
@@ -265,7 +273,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(asset=callback.data.rsplit(":", 1)[1])
         await state.set_state(ChangeFlow.side)
-        await _callback_message(callback, "Какую цену отслеживать?", side_keyboard("change"))
+        await update_callback(callback, "Какую цену отслеживать?", side_keyboard("change"))
 
     @router.callback_query(ChangeFlow.side, F.data.startswith("change:side:"))
     async def change_side(callback: CallbackQuery, state: FSMContext) -> None:
@@ -273,7 +281,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(side=callback.data.rsplit(":", 1)[1])
         await state.set_state(ChangeFlow.percent)
-        await _callback_message(
+        await update_callback(
             callback, "Введите процент изменения от 0,1 до 100:", back_keyboard()
         )
 
@@ -282,7 +290,11 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if not await owner_required(message, repository):
             return
         try:
-            percent = parse_positive_decimal(message.text or "", maximum=Decimal("100"))
+            percent = parse_positive_decimal(
+                message.text or "",
+                minimum=Decimal("0.1"),
+                maximum=Decimal("100"),
+            )
             data = await state.get_data()
             asset = Asset(data["asset"])
             side = QuoteSide(data["side"])
@@ -344,7 +356,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             if kind == "interval"
             else "Введите время ЧЧ:ММ (Екатеринбург):"
         )
-        await _callback_message(callback, prompt, back_keyboard())
+        await update_callback(callback, prompt, back_keyboard())
 
     @router.message(ScheduleFlow.value)
     async def schedule_value(message: Message, state: FSMContext) -> None:
@@ -406,7 +418,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             if kind == "alert"
             else await repository.delete_schedule(int(identifier))
         )
-        await _callback_message(
+        await update_callback(
             callback,
             "✅ Правило удалено." if deleted else "Правило уже удалено.",
             main_menu_keyboard(),
@@ -420,19 +432,19 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             text = format_market_summary(await market_provider.get_snapshots())
         except Exception:
             text = "⚠️ Не удалось получить цены Walt. Повторите немного позже."
-        await _callback_message(callback, text, main_menu_keyboard())
+        await update_callback(callback, text, main_menu_keyboard())
 
     @router.callback_query(F.data == "menu:home")
     async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.clear()
-            await _callback_message(callback, WELCOME, main_menu_keyboard())
+            await update_callback(callback, WELCOME, main_menu_keyboard())
 
     @router.callback_query(F.data == "menu:opportunity")
     async def menu_opportunity(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.set_state(OpportunityFlow.mode)
-            await _callback_message(
+            await update_callback(
                 callback,
                 format_opportunity_settings(await repository.get_opportunity_settings()),
                 opportunity_mode_keyboard(),
@@ -447,7 +459,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         mode = OpportunityMode(callback.data.rsplit(":", 1)[1])
         await state.update_data(opportunity_mode=mode.value)
         await state.set_state(OpportunityFlow.threshold)
-        await _callback_message(
+        await update_callback(
             callback,
             "Выберите минимальную расчётную разницу с биржевым курсом:",
             opportunity_threshold_keyboard(),
@@ -466,7 +478,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             min_spread_percent=value,
         )
         await state.clear()
-        await _callback_message(
+        await update_callback(
             callback,
             "✅ Автоуведомления настроены.\n\n"
             + format_opportunity_settings(await repository.get_opportunity_settings()),
@@ -479,7 +491,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await repository.disable_opportunities()
         await state.clear()
-        await _callback_message(
+        await update_callback(
             callback,
             "⛔ Автоуведомления о выгодных лотах отключены.",
             main_menu_keyboard(),
@@ -489,24 +501,24 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
     async def menu_alert(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.set_state(AlertFlow.asset)
-            await _callback_message(callback, "Выберите монету:", asset_keyboard("alert"))
+            await update_callback(callback, "Выберите монету:", asset_keyboard("alert"))
 
     @router.callback_query(F.data == "menu:change")
     async def menu_change(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.set_state(ChangeFlow.asset)
-            await _callback_message(callback, "Выберите монету:", asset_keyboard("change"))
+            await update_callback(callback, "Выберите монету:", asset_keyboard("change"))
 
     @router.callback_query(F.data == "menu:schedule")
     async def menu_schedule(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.set_state(ScheduleFlow.kind)
-            await _callback_message(callback, "Выберите тип сводки:", schedule_keyboard())
+            await update_callback(callback, "Выберите тип сводки:", schedule_keyboard())
 
     @router.callback_query(F.data == "menu:alerts")
     async def menu_alerts(callback: CallbackQuery) -> None:
         if await owner_required(callback, repository):
-            await _callback_message(
+            await update_callback(
                 callback,
                 format_rules(
                     await repository.list_alerts(),
@@ -523,35 +535,49 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         alerts = await repository.list_alerts()
         schedules = await repository.list_schedules()
         if not alerts and not schedules:
-            await _callback_message(
+            await update_callback(
                 callback, "Удалять нечего — активных правил нет.", main_menu_keyboard()
             )
             return
-        await _callback_message(callback, "Выберите правило:", delete_keyboard(alerts, schedules))
+        await update_callback(callback, "Выберите правило:", delete_keyboard(alerts, schedules))
 
     @router.callback_query(F.data == "menu:pause")
     async def menu_pause(callback: CallbackQuery) -> None:
         if await owner_required(callback, repository):
             await repository.set_paused(True)
-            await _callback_message(callback, "⏸ Уведомления приостановлены.", main_menu_keyboard())
+            await update_callback(
+                callback, "⏸ Уведомления приостановлены.", main_menu_keyboard()
+            )
 
     @router.callback_query(F.data == "menu:resume")
     async def menu_resume(callback: CallbackQuery) -> None:
         if await owner_required(callback, repository):
             await repository.set_paused(False)
-            await _callback_message(callback, "▶️ Уведомления возобновлены.", main_menu_keyboard())
+            await update_callback(
+                callback, "▶️ Уведомления возобновлены.", main_menu_keyboard()
+            )
 
     @router.callback_query(F.data == "menu:help")
     async def menu_help(callback: CallbackQuery) -> None:
         if await owner_required(callback, repository):
-            await _callback_message(callback, HELP, main_menu_keyboard())
+            await update_callback(callback, HELP, main_menu_keyboard())
 
     return router
 
 
 async def _callback_message(
-    callback: CallbackQuery, text: str, reply_markup: Any | None = None
+    callback: CallbackQuery,
+    repository: Repository,
+    text: str,
+    reply_markup: Any | None = None,
 ) -> None:
     await callback.answer()
     if callback.message is not None:
-        await callback.message.edit_text(text, reply_markup=reply_markup)
+        async with repository.message_delivery_lock:
+            try:
+                await callback.message.edit_text(text, reply_markup=reply_markup)
+            except TelegramBadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    return
+                sent = await callback.message.answer(text, reply_markup=reply_markup)
+                await repository.set_last_message_id(sent.message_id)

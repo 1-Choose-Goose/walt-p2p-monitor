@@ -1,9 +1,10 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from .alerts import evaluate_percent_change, evaluate_threshold
 from .market import MarketUnavailable, select_best_buy_offer, select_best_sell_offer
@@ -15,6 +16,8 @@ from .ui import _money, _offer_details, format_market_summary
 from .walt import WaltClient
 
 logger = logging.getLogger(__name__)
+MAX_SNAPSHOT_AGE = timedelta(minutes=5)
+DEFAULT_TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
 
 
 class MessageSender(Protocol):
@@ -40,7 +43,35 @@ class MarketService:
                 self._client.fetch_ads(asset, QuoteSide.BUY),
                 self._client.fetch_ads(asset, QuoteSide.SELL),
                 self._fetch_exchange_rate(asset),
+                return_exceptions=True,
             )
+            if isinstance(buy_ads, BaseException):
+                logger.warning(
+                    "Failed to fetch %s buy ads (%s)",
+                    asset.value,
+                    type(buy_ads).__name__,
+                )
+                buy_ads = []
+                sell_source_available = False
+            else:
+                sell_source_available = True
+            if isinstance(sell_ads, BaseException):
+                logger.warning(
+                    "Failed to fetch %s sell ads (%s)",
+                    asset.value,
+                    type(sell_ads).__name__,
+                )
+                sell_ads = []
+                buy_source_available = False
+            else:
+                buy_source_available = True
+            if isinstance(exchange_price, BaseException):
+                logger.warning(
+                    "Failed to fetch %s exchange rate (%s)",
+                    asset.value,
+                    type(exchange_price).__name__,
+                )
+                exchange_price = None
             try:
                 buy = select_best_buy_offer(sell_ads)
             except MarketUnavailable:
@@ -54,6 +85,8 @@ class MarketService:
                 buy=buy,
                 sell=sell,
                 exchange_price=exchange_price,
+                buy_source_available=buy_source_available,
+                sell_source_available=sell_source_available,
             )
 
         snapshots = await asyncio.gather(*(fetch(asset) for asset in Asset))
@@ -74,13 +107,19 @@ async def run_monitor_cycle(
     provider: SnapshotProvider,
     sender: MessageSender,
     now: datetime,
+    *,
+    schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
 ) -> None:
     if await repository.is_paused():
         return
     owner_id = await repository.get_owner_id()
     if owner_id is None:
         return
-    snapshots = await provider.get_snapshots()
+    snapshots = [
+        snapshot
+        for snapshot in await provider.get_snapshots()
+        if _snapshot_is_fresh(snapshot, now)
+    ]
     by_asset = {snapshot.asset: snapshot for snapshot in snapshots}
 
     for rule in await repository.list_alerts(enabled_only=True):
@@ -123,55 +162,60 @@ async def run_monitor_cycle(
 
     opportunity_settings = await repository.get_opportunity_settings()
     if opportunity_settings.enabled:
-        opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
-        for snapshot in snapshots:
-            if snapshot.exchange_price is None:
-                continue
-            for side, offer in (
-                (QuoteSide.BUY, snapshot.buy),
-                (QuoteSide.SELL, snapshot.sell),
-            ):
-                if offer is None or not mode_includes_side(opportunity_settings.mode, side):
+        async with repository.opportunity_delivery_lock:
+            opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
+            for snapshot in snapshots:
+                if snapshot.exchange_price is None:
                     continue
-                spread = opportunity_percent(
-                    side,
-                    p2p_price=offer.price,
-                    exchange_price=snapshot.exchange_price,
-                )
-                if spread < opportunity_settings.min_spread_percent:
-                    continue
-                if (
-                    await repository.get_last_opportunity_ad(snapshot.asset, side)
-                    == offer.id
+                for side, offer in (
+                    (QuoteSide.BUY, snapshot.buy),
+                    (QuoteSide.SELL, snapshot.sell),
                 ):
-                    continue
-                opportunities.append((snapshot, side, offer, spread))
-        if opportunities:
-            try:
-                await sender.send_message(
-                    owner_id,
-                    "\n\n".join(
-                        _opportunity_message(
-                            snapshot,
-                            side,
-                            offer,
-                            spread,
-                            opportunity_settings.min_spread_percent,
-                        )
-                        for snapshot, side, offer, spread in opportunities
-                    ),
-                )
-                for snapshot, side, offer, _ in opportunities:
-                    await repository.mark_opportunity_notified(
-                        snapshot.asset, side, offer.id
+                    if offer is None or not mode_includes_side(
+                        opportunity_settings.mode, side
+                    ):
+                        continue
+                    spread = opportunity_percent(
+                        side,
+                        p2p_price=offer.price,
+                        exchange_price=snapshot.exchange_price,
                     )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to deliver opportunity summary (%s)", type(exc).__name__
-                )
+                    if spread < opportunity_settings.min_spread_percent:
+                        continue
+                    if await repository.was_opportunity_notified(
+                        snapshot.asset, side, offer.id
+                    ):
+                        continue
+                    opportunities.append((snapshot, side, offer, spread))
+            if opportunities:
+                try:
+                    await sender.send_message(
+                        owner_id,
+                        "\n\n".join(
+                            _opportunity_message(
+                                snapshot,
+                                side,
+                                offer,
+                                spread,
+                                opportunity_settings.min_spread_percent,
+                            )
+                            for snapshot, side, offer, spread in opportunities
+                        ),
+                    )
+                    await repository.mark_opportunities_notified(
+                        [
+                            (snapshot.asset, side, offer.id)
+                            for snapshot, side, offer, _ in opportunities
+                        ]
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to deliver opportunity summary (%s)",
+                        type(exc).__name__,
+                    )
 
     for schedule in await repository.list_schedules(enabled_only=True):
-        if not schedule_is_due(schedule, now):
+        if not schedule_is_due(schedule, now, timezone=schedule_timezone):
             continue
         try:
             await sender.send_message(owner_id, format_market_summary(snapshots))
@@ -186,11 +230,18 @@ async def monitor_forever(
     sender: MessageSender,
     *,
     interval_seconds: int,
+    schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     while True:
         try:
-            await run_monitor_cycle(repository, provider, sender, datetime.now(UTC))
+            await run_monitor_cycle(
+                repository,
+                provider,
+                sender,
+                datetime.now(UTC),
+                schedule_timezone=schedule_timezone,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -241,3 +292,10 @@ def _opportunity_message(
         f"Ваш порог: {str(threshold).replace('.', ',')}%\n"
         f"{_offer_details(offer)}"
     )
+
+
+def _snapshot_is_fresh(snapshot: MarketSnapshot, now: datetime) -> bool:
+    if snapshot.captured_at.tzinfo is None or now.tzinfo is None:
+        return False
+    age = now - snapshot.captured_at
+    return -timedelta(seconds=30) <= age <= MAX_SNAPSHOT_AGE

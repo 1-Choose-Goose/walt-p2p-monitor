@@ -37,13 +37,18 @@ PAYMENT_NAMES = {
 }
 
 
-def parse_positive_decimal(value: str, *, maximum: Decimal = Decimal("100")) -> Decimal:
+def parse_positive_decimal(
+    value: str,
+    *,
+    minimum: Decimal = Decimal("0"),
+    maximum: Decimal = Decimal("100"),
+) -> Decimal:
     normalized = value.strip().replace(",", ".")
     try:
         parsed = Decimal(normalized)
     except InvalidOperation as exc:
         raise ValueError("Введите положительное число") from exc
-    if not parsed.is_finite() or parsed <= 0 or parsed > maximum:
+    if not parsed.is_finite() or parsed <= 0 or parsed < minimum or parsed > maximum:
         raise ValueError("Число вне допустимого диапазона")
     return parsed
 
@@ -62,12 +67,14 @@ def parse_daily_time(value: str) -> str:
 
 
 def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
-    blocks = ["📊 <b>Walt P2P — лучшие цены</b>"]
+    blocks = ["📊 <b>Walt P2P — актуальные цены</b>"]
     for snapshot in snapshots:
         lines = [f"\n<b>{snapshot.asset.value} / RUB</b>"]
         if snapshot.exchange_price is not None:
             lines.append(f"🏦 Биржевой курс (Coinbase): {_money(snapshot.exchange_price)} ₽")
-        if snapshot.buy is None:
+        if not snapshot.buy_source_available:
+            lines.append("🟢 Купить: Walt временно недоступен")
+        elif snapshot.buy is None:
             lines.append("🟢 Купить: подходящих P2P-объявлений нет")
         else:
             lines.extend(
@@ -76,7 +83,9 @@ def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
                     _offer_details(snapshot.buy),
                 ]
             )
-        if snapshot.sell is None:
+        if not snapshot.sell_source_available:
+            lines.append("🔵 Продать: Walt временно недоступен")
+        elif snapshot.sell is None:
             lines.append("🔵 Продать: подходящих P2P-объявлений нет")
         else:
             lines.extend(

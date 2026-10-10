@@ -15,6 +15,7 @@ fi
 app_dir=/opt/walt-price-bot
 data_dir=/var/lib/walt-price-bot
 env_file=/etc/walt-price-bot.env
+database_file=${data_dir}/walt-price-bot.db
 
 if ! id -u waltbot >/dev/null 2>&1; then
   useradd --system --home-dir "${data_dir}" --shell /usr/sbin/nologin waltbot
@@ -22,6 +23,15 @@ fi
 
 install -d -m 0755 -o root -g root "${app_dir}"
 install -d -m 0700 -o waltbot -g waltbot "${data_dir}"
+if systemctl is-active --quiet walt-price-bot.service; then
+  systemctl stop walt-price-bot.service
+fi
+if [[ -f ${database_file} ]]; then
+  backup_file=${database_file}.pre-upgrade.$(date -u +%Y%m%dT%H%M%SZ)
+  cp -a -- "${database_file}" "${backup_file}"
+  chown waltbot:waltbot "${backup_file}"
+  chmod 0600 "${backup_file}"
+fi
 rm -rf "${app_dir}/build" "${app_dir}/src"
 cp -a "${source_dir}/pyproject.toml" "${source_dir}/uv.lock" \
   "${source_dir}/requirements.lock" "${app_dir}/"

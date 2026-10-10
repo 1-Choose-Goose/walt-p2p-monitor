@@ -35,3 +35,45 @@ def test_opportunity_can_be_negative_and_rejects_invalid_exchange_price() -> Non
             p2p_price=Decimal("90"),
             exchange_price=Decimal("0"),
         )
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "0", "-1"])
+def test_opportunity_rejects_invalid_p2p_price(value: str) -> None:
+    with pytest.raises(ValueError, match="P2P price"):
+        opportunity_percent(
+            QuoteSide.BUY,
+            p2p_price=Decimal(value),
+            exchange_price=Decimal("100"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("side", "p2p_price", "expected"),
+    [
+        (QuoteSide.BUY, "99.5", Decimal("0.50")),
+        (QuoteSide.SELL, "101", Decimal("1.00")),
+        (QuoteSide.BUY, "98", Decimal("2.00")),
+        (QuoteSide.SELL, "103", Decimal("3.00")),
+    ],
+)
+def test_opportunity_exact_supported_thresholds(
+    side: QuoteSide, p2p_price: str, expected: Decimal
+) -> None:
+    assert opportunity_percent(
+        side, p2p_price=Decimal(p2p_price), exchange_price=Decimal("100")
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("p2p_price", "exchange_price"),
+    [("5E-101", "1E-100"), ("9.9E99", "1E100")],
+)
+def test_opportunity_handles_very_small_and_large_prices(
+    p2p_price: str, exchange_price: str
+) -> None:
+    result = opportunity_percent(
+        QuoteSide.BUY,
+        p2p_price=Decimal(p2p_price),
+        exchange_price=Decimal(exchange_price),
+    )
+    assert result.is_finite()

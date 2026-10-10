@@ -13,6 +13,8 @@ def opportunity_percent(
     p2p_price: Decimal,
     exchange_price: Decimal,
 ) -> Decimal:
+    if not p2p_price.is_finite() or p2p_price <= 0:
+        raise ValueError("P2P price must be positive")
     if not exchange_price.is_finite() or exchange_price <= 0:
         raise ValueError("exchange price must be positive")
     difference = (

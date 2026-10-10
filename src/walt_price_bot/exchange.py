@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -6,6 +8,7 @@ import aiohttp
 from .models import Asset
 
 COINBASE_RATES_URL = "https://api.coinbase.com/v2/exchange-rates"
+RETRYABLE_STATUSES = {429, 503}
 
 
 class ExchangeRateError(RuntimeError):
@@ -13,26 +16,51 @@ class ExchangeRateError(RuntimeError):
 
 
 class CoinbaseRatesClient:
-    def __init__(self, *, session: Any) -> None:
+    def __init__(
+        self,
+        *,
+        session: Any,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        max_attempts: int = 3,
+    ) -> None:
         self._session = session
+        self._sleep = sleep
+        self._max_attempts = max_attempts
 
     async def fetch_rub_rate(self, asset: Asset) -> Decimal:
         timeout = aiohttp.ClientTimeout(total=10)
-        try:
-            async with self._session.get(
-                COINBASE_RATES_URL,
-                params={"currency": asset.value},
-                headers={"accept": "application/json"},
-                timeout=timeout,
-                allow_redirects=False,
-            ) as response:
-                if response.status != 200:
-                    raise ExchangeRateError(f"Coinbase API HTTP {response.status}")
-                payload = await response.json()
-        except (aiohttp.ClientError, TimeoutError) as exc:
-            raise ExchangeRateError("Coinbase API temporarily unavailable") from exc
+        last_error: Exception | None = None
+        payload: object | None = None
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                async with self._session.get(
+                    COINBASE_RATES_URL,
+                    params={"currency": asset.value},
+                    headers={"accept": "application/json"},
+                    timeout=timeout,
+                    allow_redirects=False,
+                ) as response:
+                    if response.status == 200:
+                        payload = await response.json()
+                        break
+                    error = ExchangeRateError(
+                        f"Coinbase API HTTP {response.status}"
+                    )
+                    if response.status not in RETRYABLE_STATUSES:
+                        raise error
+                    last_error = error
+            except (aiohttp.ClientError, TimeoutError) as exc:
+                last_error = exc
+            if attempt < self._max_attempts:
+                await self._sleep(float(2 ** (attempt - 1)))
+        else:
+            raise ExchangeRateError(
+                "Coinbase API temporarily unavailable"
+            ) from last_error
 
         try:
+            if not isinstance(payload, dict):
+                raise TypeError
             data = payload["data"]
             if data["currency"] != asset.value:
                 raise ExchangeRateError("unexpected Coinbase currency")

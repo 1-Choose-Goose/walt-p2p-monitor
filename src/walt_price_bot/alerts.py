@@ -15,7 +15,9 @@ class AlertEvaluation:
 def evaluate_threshold(rule: AlertRule, current_price: Decimal) -> AlertEvaluation:
     if rule.kind is not AlertKind.THRESHOLD or rule.threshold_direction is None:
         raise ValueError("threshold rule required")
+    _require_positive_finite(current_price, "current price")
     target = Decimal(rule.target)
+    _require_positive_finite(target, "threshold target")
     crossed = (
         current_price >= target
         if rule.threshold_direction is ThresholdDirection.ABOVE
@@ -31,14 +33,13 @@ def evaluate_threshold(rule: AlertRule, current_price: Decimal) -> AlertEvaluati
 def evaluate_percent_change(rule: AlertRule, current_price: Decimal) -> AlertEvaluation:
     if rule.kind is not AlertKind.PERCENT:
         raise ValueError("percent rule required")
+    _require_positive_finite(current_price, "current price")
     target = Decimal(rule.target)
-    if target <= 0:
-        raise ValueError("percent target must be positive")
+    _require_positive_finite(target, "percent target")
     if rule.baseline is None:
         return AlertEvaluation(notify=False, next_baseline=current_price)
     baseline = Decimal(rule.baseline)
-    if baseline <= 0:
-        raise ValueError("percent baseline must be positive")
+    _require_positive_finite(baseline, "percent baseline")
     change = (current_price - baseline) / baseline * Decimal("100")
     if abs(change) >= target:
         return AlertEvaluation(
@@ -51,3 +52,8 @@ def evaluate_percent_change(rule: AlertRule, current_price: Decimal) -> AlertEva
         next_baseline=baseline,
         change_percent=change,
     )
+
+
+def _require_positive_finite(value: Decimal, name: str) -> None:
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"{name} must be positive and finite")

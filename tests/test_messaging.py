@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -56,3 +57,66 @@ async def test_interactive_reply_replaces_previous_bot_message(tmp_path: Path) -
 
     bot.delete_message.assert_awaited_once_with(101, 20)
     assert await repository.get_last_message_id() == 21
+
+
+@pytest.mark.asyncio
+async def test_concurrent_replacements_are_serialized(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    await repository.set_last_message_id(10)
+
+    class Bot:
+        def __init__(self) -> None:
+            self.deleted: list[int] = []
+            self.next_id = 11
+
+        async def delete_message(self, chat_id: int, message_id: int) -> None:
+            assert chat_id == 101
+            self.deleted.append(message_id)
+
+        async def send_message(self, chat_id: int, text: str, **_: object) -> object:
+            assert chat_id == 101
+            await asyncio.sleep(0)
+            message_id = self.next_id
+            self.next_id += 1
+            return SimpleNamespace(message_id=message_id)
+
+    bot = Bot()
+    sender = ReplacingSender(bot, repository)
+
+    await asyncio.gather(
+        sender.send_message(101, "Первое"),
+        sender.send_message(101, "Второе"),
+    )
+
+    assert bot.deleted == [10, 11]
+    assert await repository.get_last_message_id() == 12
+
+
+@pytest.mark.asyncio
+async def test_interactive_and_background_replacements_share_lock(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    await repository.set_last_message_id(10)
+    deleted: list[int] = []
+
+    async def delete_message(_: int, message_id: int) -> None:
+        deleted.append(message_id)
+
+    bot = SimpleNamespace(
+        delete_message=delete_message,
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=12)),
+    )
+    message = SimpleNamespace(
+        bot=bot,
+        chat=SimpleNamespace(id=101),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=11)),
+    )
+
+    await asyncio.gather(
+        replace_message(message, repository, "Кнопка"),
+        ReplacingSender(bot, repository).send_message(101, "Уведомление"),
+    )
+
+    assert deleted == [10, 11]
+    assert await repository.get_last_message_id() == 12

@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from walt_price_bot.alerts import evaluate_percent_change, evaluate_threshold
 from walt_price_bot.models import (
     AlertKind,
@@ -76,3 +78,13 @@ def test_percent_rule_initializes_missing_baseline_without_notification() -> Non
 
     assert result.notify is False
     assert result.next_baseline == Decimal("101.25")
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "0", "-1"])
+def test_alert_calculations_reject_invalid_current_price(value: str) -> None:
+    with pytest.raises(ValueError, match="current price"):
+        evaluate_threshold(
+            threshold_rule(direction=ThresholdDirection.ABOVE), Decimal(value)
+        )
+    with pytest.raises(ValueError, match="current price"):
+        evaluate_percent_change(percent_rule(), Decimal(value))

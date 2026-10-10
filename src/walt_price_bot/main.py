@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -20,9 +21,9 @@ from .walt import WaltClient
 
 logger = logging.getLogger(__name__)
 
-BOT_SHORT_DESCRIPTION = "Мониторинг лучших P2P-цен Walt в рублях."
+BOT_SHORT_DESCRIPTION = "Мониторинг P2P-цен Walt в рублях."
 BOT_DESCRIPTION = (
-    "Бот мониторит лучшие P2P-предложения Walt для USDT, TON и BTC в рублях, "
+    "Бот мониторит подходящие P2P-предложения Walt для USDT, TON и BTC в рублях, "
     "показывает биржевой курс Coinbase и уведомляет о расчётно выгодных лотах. "
     "Нажмите /start, чтобы начать работу."
 )
@@ -106,6 +107,7 @@ async def run() -> None:
                     market,
                     ReplacingSender(bot, repository, reply_markup=main_menu_keyboard()),
                     interval_seconds=settings.poll_interval_seconds,
+                    schedule_timezone=ZoneInfo(settings.timezone),
                 ),
                 name="walt-monitor",
             )

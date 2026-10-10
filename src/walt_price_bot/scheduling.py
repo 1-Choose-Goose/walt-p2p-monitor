@@ -6,7 +6,9 @@ from .models import ScheduleKind, ScheduleRule
 YEKT = ZoneInfo("Asia/Yekaterinburg")
 
 
-def next_schedule_due(rule: ScheduleRule, now: datetime) -> datetime:
+def next_schedule_due(
+    rule: ScheduleRule, now: datetime, *, timezone: ZoneInfo = YEKT
+) -> datetime:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     if rule.kind is ScheduleKind.INTERVAL:
@@ -20,11 +22,11 @@ def next_schedule_due(rule: ScheduleRule, now: datetime) -> datetime:
         if rule.daily_time is None:
             raise ValueError("daily time required")
         hour, minute = _parse_clock(rule.daily_time)
-        local_now = now.astimezone(YEKT)
-        today_due = datetime.combine(local_now.date(), time(hour, minute), tzinfo=YEKT)
+        local_now = now.astimezone(timezone)
+        today_due = datetime.combine(local_now.date(), time(hour, minute), tzinfo=timezone)
         if rule.last_sent_at is None:
             return today_due.astimezone(UTC)
-        last_local = _parse_aware(rule.last_sent_at).astimezone(YEKT)
+        last_local = _parse_aware(rule.last_sent_at).astimezone(timezone)
         if last_local.date() >= local_now.date():
             return (today_due + timedelta(days=1)).astimezone(UTC)
         return today_due.astimezone(UTC)
@@ -32,10 +34,14 @@ def next_schedule_due(rule: ScheduleRule, now: datetime) -> datetime:
     raise ValueError("unsupported schedule kind")
 
 
-def schedule_is_due(rule: ScheduleRule, now: datetime) -> bool:
+def schedule_is_due(
+    rule: ScheduleRule, now: datetime, *, timezone: ZoneInfo = YEKT
+) -> bool:
     if not rule.enabled:
         return False
-    return now.astimezone(UTC) >= next_schedule_due(rule, now).astimezone(UTC)
+    return now.astimezone(UTC) >= next_schedule_due(
+        rule, now, timezone=timezone
+    ).astimezone(UTC)
 
 
 def _parse_aware(value: str) -> datetime:

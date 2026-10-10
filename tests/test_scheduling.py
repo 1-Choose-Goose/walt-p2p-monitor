@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from walt_price_bot.models import ScheduleKind, ScheduleRule
 from walt_price_bot.scheduling import schedule_is_due
@@ -53,3 +54,18 @@ def test_new_interval_schedule_is_due_immediately() -> None:
     rule = schedule(kind=ScheduleKind.INTERVAL, interval_hours=6)
 
     assert schedule_is_due(rule, datetime(2026, 10, 10, 8, 0, tzinfo=UTC)) is True
+
+
+def test_daily_schedule_uses_configured_timezone() -> None:
+    rule = schedule(kind=ScheduleKind.DAILY, daily_time="09:30")
+
+    assert schedule_is_due(
+        rule,
+        datetime(2026, 10, 10, 6, 29, tzinfo=UTC),
+        timezone=ZoneInfo("Europe/Moscow"),
+    ) is False
+    assert schedule_is_due(
+        rule,
+        datetime(2026, 10, 10, 6, 30, tzinfo=UTC),
+        timezone=ZoneInfo("Europe/Moscow"),
+    ) is True

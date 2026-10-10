@@ -1,6 +1,7 @@
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,3 +19,12 @@ class Settings(BaseSettings):
     owner_telegram_id: int | None = Field(default=None, gt=0)
     poll_interval_seconds: int = Field(default=30, ge=30, le=3600)
     timezone: str = "Asia/Yekaterinburg"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("unknown timezone") from exc
+        return value

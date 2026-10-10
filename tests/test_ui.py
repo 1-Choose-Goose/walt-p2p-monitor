@@ -199,6 +199,12 @@ def test_positive_decimal_accepts_russian_comma() -> None:
     assert parse_positive_decimal(" 90,25 ") == Decimal("90.25")
 
 
+def test_positive_decimal_honors_lower_bound() -> None:
+    with pytest.raises(ValueError):
+        parse_positive_decimal("0,09", minimum=Decimal("0.1"))
+    assert parse_positive_decimal("0,1", minimum=Decimal("0.1")) == Decimal("0.1")
+
+
 @pytest.mark.parametrize("value", ["9:30", "24:00", "12:99", "abc"])
 def test_daily_time_requires_hh_mm(value: str) -> None:
     with pytest.raises(ValueError):

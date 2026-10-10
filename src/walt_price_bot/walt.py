@@ -23,18 +23,31 @@ class WaltClient:
         api_key: str,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_attempts: int = 3,
+        max_pages: int = 3,
     ) -> None:
         self._session = session
         self._api_key = api_key
         self._sleep = sleep
         self._max_attempts = max_attempts
+        self._max_pages = max_pages
 
     async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
+        ads: list[P2PAd] = []
+        for page in range(1, self._max_pages + 1):
+            page_ads = await self._fetch_page(asset, side, page)
+            ads.extend(page_ads)
+            if len(page_ads) < 50:
+                break
+        return ads
+
+    async def _fetch_page(
+        self, asset: Asset, side: QuoteSide, page: int
+    ) -> list[P2PAd]:
         payload = {
             "cryptoCurrency": asset.value,
             "fiatCurrency": "RUB",
             "side": side.value,
-            "page": 1,
+            "page": page,
             "pageSize": 50,
         }
         headers = {"X-API-Key": self._api_key, "accept": "application/json"}
@@ -91,7 +104,14 @@ class WaltClient:
             rating = Decimal(str(rating_value)) if rating_value is not None else None
         except (KeyError, InvalidOperation, ValueError) as exc:
             raise WaltAPIError("invalid numeric field in Walt ad") from exc
-        if price <= 0 or min_amount < 0 or max_amount < min_amount:
+        numbers = (price, min_amount, max_amount)
+        if (
+            not all(value.is_finite() for value in numbers)
+            or price <= 0
+            or min_amount < 0
+            or max_amount < min_amount
+            or (rating is not None and (not rating.is_finite() or rating < 0))
+        ):
             raise WaltAPIError("invalid amount range in Walt ad")
         payments = item.get("payments", [])
         if not isinstance(payments, list) or not all(isinstance(value, str) for value in payments):
