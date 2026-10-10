@@ -209,6 +209,12 @@ class Repository:
             )
             await db.commit()
 
+    async def delete_schedule(self, schedule_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+            await db.commit()
+            return cursor.rowcount == 1
+
     @staticmethod
     async def _scalar(db: aiosqlite.Connection, query: str) -> object | None:
         row = await (await db.execute(query)).fetchone()
