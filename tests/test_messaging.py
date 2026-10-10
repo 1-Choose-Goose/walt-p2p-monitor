@@ -10,7 +10,7 @@ from walt_price_bot.messaging import (
     ReplacingSender,
     replace_message,
 )
-from walt_price_bot.repository import Repository
+from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 
 
 @pytest.mark.asyncio
@@ -28,42 +28,47 @@ async def test_incoming_user_message_is_deleted_after_handling() -> None:
 async def test_replacing_sender_deletes_previous_bot_message(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    await repository.set_last_message_id(10)
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 10)
     bot = SimpleNamespace(
         delete_message=AsyncMock(),
         send_message=AsyncMock(return_value=SimpleNamespace(message_id=11)),
     )
 
-    await ReplacingSender(bot, repository, reply_markup="кнопки").send_message(101, "Новая цена")
+    await ReplacingSender(bot, repository, reply_markup="кнопки").send_message(
+        ADMIN_TELEGRAM_ID, "Новая цена"
+    )
 
-    bot.delete_message.assert_awaited_once_with(101, 10)
-    bot.send_message.assert_awaited_once_with(101, "Новая цена", reply_markup="кнопки")
-    assert await repository.get_last_message_id() == 11
+    bot.delete_message.assert_awaited_once_with(ADMIN_TELEGRAM_ID, 10)
+    bot.send_message.assert_awaited_once_with(
+        ADMIN_TELEGRAM_ID, "Новая цена", reply_markup="кнопки"
+    )
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 11
 
 
 @pytest.mark.asyncio
 async def test_interactive_reply_replaces_previous_bot_message(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    await repository.set_last_message_id(20)
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 20)
     bot = SimpleNamespace(delete_message=AsyncMock())
     message = SimpleNamespace(
         bot=bot,
-        chat=SimpleNamespace(id=101),
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         answer=AsyncMock(return_value=SimpleNamespace(message_id=21)),
     )
 
     await replace_message(message, repository, "Актуальное сообщение")
 
-    bot.delete_message.assert_awaited_once_with(101, 20)
-    assert await repository.get_last_message_id() == 21
+    bot.delete_message.assert_awaited_once_with(ADMIN_TELEGRAM_ID, 20)
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 21
 
 
 @pytest.mark.asyncio
 async def test_concurrent_replacements_are_serialized(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    await repository.set_last_message_id(10)
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 10)
 
     class Bot:
         def __init__(self) -> None:
@@ -71,11 +76,11 @@ async def test_concurrent_replacements_are_serialized(tmp_path: Path) -> None:
             self.next_id = 11
 
         async def delete_message(self, chat_id: int, message_id: int) -> None:
-            assert chat_id == 101
+            assert chat_id == ADMIN_TELEGRAM_ID
             self.deleted.append(message_id)
 
         async def send_message(self, chat_id: int, text: str, **_: object) -> object:
-            assert chat_id == 101
+            assert chat_id == ADMIN_TELEGRAM_ID
             await asyncio.sleep(0)
             message_id = self.next_id
             self.next_id += 1
@@ -85,19 +90,19 @@ async def test_concurrent_replacements_are_serialized(tmp_path: Path) -> None:
     sender = ReplacingSender(bot, repository)
 
     await asyncio.gather(
-        sender.send_message(101, "Первое"),
-        sender.send_message(101, "Второе"),
+        sender.send_message(ADMIN_TELEGRAM_ID, "Первое"),
+        sender.send_message(ADMIN_TELEGRAM_ID, "Второе"),
     )
 
     assert bot.deleted == [10, 11]
-    assert await repository.get_last_message_id() == 12
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 12
 
 
 @pytest.mark.asyncio
 async def test_interactive_and_background_replacements_share_lock(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    await repository.set_last_message_id(10)
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 10)
     deleted: list[int] = []
 
     async def delete_message(_: int, message_id: int) -> None:
@@ -109,14 +114,17 @@ async def test_interactive_and_background_replacements_share_lock(tmp_path: Path
     )
     message = SimpleNamespace(
         bot=bot,
-        chat=SimpleNamespace(id=101),
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         answer=AsyncMock(return_value=SimpleNamespace(message_id=11)),
     )
 
     await asyncio.gather(
         replace_message(message, repository, "Кнопка"),
-        ReplacingSender(bot, repository).send_message(101, "Уведомление"),
+        ReplacingSender(bot, repository).send_message(
+            ADMIN_TELEGRAM_ID, "Уведомление"
+        ),
     )
 
     assert deleted == [10, 11]
-    assert await repository.get_last_message_id() == 12
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 12

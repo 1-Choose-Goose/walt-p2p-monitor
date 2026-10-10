@@ -136,3 +136,23 @@ async def run_multi_user_cycle(
             )
 
     await asyncio.gather(*(isolated(user) for user in users))
+
+
+async def monitor_multi_user_forever(
+    repository: Repository,
+    factory: UserMarketProviderFactory,
+    sender: MessageSender,
+    *,
+    tick_seconds: int = 15,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    while True:
+        try:
+            await run_multi_user_cycle(
+                repository, factory, sender, datetime.now(UTC)
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Multi-user monitoring cycle failed")
+        await sleep(float(tick_seconds))

@@ -7,7 +7,13 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Contact, Message
+from aiogram.types import (
+    CallbackQuery,
+    Contact,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from pydantic import SecretStr
 
 from .access import AccessRequirement
@@ -16,6 +22,13 @@ from .keyboards import phone_request_keyboard, remove_reply_keyboard
 from .models import AccessStatus, AssetCatalogEntry
 from .repository import ADMIN_TELEGRAM_ID, Repository
 from .walt import TokenValidationResult, TokenValidationStatus, validate_walt_token
+
+WELCOME = (
+    "👋 <b>Walt P2P</b>\n\n"
+    "Показываю лучшие предложения Walt в рублях и сообщаю, когда появляется "
+    "подходящая цена.\n\n"
+    "Настройте монеты, сумму и способы оплаты один раз — бот всё запомнит."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +168,14 @@ def build_onboarding_router(
         await state.clear()
         user = await repository.get_user(message.from_user.id)
         if user and user.status is AccessStatus.ACTIVE:
-            await message.answer("Главное меню")
+            from .ui import main_menu_keyboard
+
+            await message.answer(
+                WELCOME,
+                reply_markup=main_menu_keyboard(
+                    user.role, await repository.is_paused(user.telegram_id)
+                ),
+            )
             return
         if user and user.status is AccessStatus.PENDING:
             await message.answer("Заявка уже отправлена и ожидает решения.")
@@ -192,6 +212,16 @@ def build_onboarding_router(
                 admin_id,
                 f"Новая заявка: {message.from_user.full_name} "
                 f"({username}), ID {message.from_user.id}.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Одобрить",
+                                callback_data=f"access:approve:{message.from_user.id}",
+                            )
+                        ]
+                    ]
+                ),
             )
 
     @router.callback_query(

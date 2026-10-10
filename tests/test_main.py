@@ -79,6 +79,9 @@ async def test_command_menu_includes_start_as_main_menu() -> None:
         "pause",
         "resume",
         "help",
+        "token",
+        "settings",
+        "admin",
     }
 
 
@@ -88,12 +91,12 @@ async def test_bot_profile_has_russian_pre_start_greeting() -> None:
 
     await set_profile_best_effort(bot)
 
-    assert bot.short_description == "Мониторинг P2P-цен Walt в рублях."
+    assert bot.short_description == "Лучшие P2P-цены Walt в рублях."
     assert bot.description is not None
-    assert "USDT, TON и BTC" in bot.description
-    assert "Coinbase" in bot.description
+    assert "P2P-предложениями Walt" in bot.description
+    assert "биржевым курсом" in bot.description
     assert "выгодных" in bot.description.lower()
-    assert "Нажмите /start, чтобы начать работу." in bot.description
+    assert "/start" not in bot.description
 
 
 @pytest.mark.asyncio

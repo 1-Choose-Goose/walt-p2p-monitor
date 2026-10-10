@@ -5,14 +5,15 @@ from html import escape
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .models import (
+    SEED_ASSETS,
     AlertKind,
     AlertRule,
     MarketSnapshot,
     OpportunityMode,
     OpportunitySettings,
     P2PAd,
-    SEED_ASSETS,
     ScheduleRule,
+    UserRole,
 )
 
 WALT_MINI_APP_URL = "https://telegram.me/walt/start?startapp="
@@ -163,7 +164,7 @@ def format_opportunity_settings(settings: OpportunitySettings) -> str:
     )
 
 
-def asset_keyboard(prefix: str) -> InlineKeyboardMarkup:
+def asset_keyboard(prefix: str, entries=SEED_ASSETS) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -171,34 +172,51 @@ def asset_keyboard(prefix: str) -> InlineKeyboardMarkup:
                     text=entry.symbol.value,
                     callback_data=f"{prefix}:asset:{entry.symbol.value}",
                 )
-                for entry in SEED_ASSETS
+                for entry in entries
             ],
             _back_row(),
         ]
     )
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
+def main_menu_keyboard(
+    role: UserRole = UserRole.USER, paused: bool = False
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="💱 Текущие цены", callback_data="menu:price")],
+        [
+            InlineKeyboardButton(text="🔔 Уведомления", callback_data="menu:notifications"),
+            InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:open:"),
+        ],
+    ]
+    if role is UserRole.ADMIN:
+        rows.append(
+            [InlineKeyboardButton(text="👥 Пользователи", callback_data="menu:admin")]
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="💎 Выгодные лоты", callback_data="menu:opportunity")],
             [
-                InlineKeyboardButton(text="💱 Текущие цены", callback_data="menu:price"),
-                InlineKeyboardButton(text="💎 Выгодные лоты", callback_data="menu:opportunity"),
+                InlineKeyboardButton(text="🎯 Ценовой порог", callback_data="menu:alert"),
+                InlineKeyboardButton(text="📈 Изменение цены", callback_data="menu:change"),
             ],
             [
-                InlineKeyboardButton(text="🔔 Создать уведомление", callback_data="menu:alert"),
-                InlineKeyboardButton(text="📈 Изменение в процентах", callback_data="menu:change"),
-            ],
-            [
-                InlineKeyboardButton(text="🕒 Расписание", callback_data="menu:schedule"),
+                InlineKeyboardButton(text="🕒 Сводки", callback_data="menu:schedule"),
                 InlineKeyboardButton(text="📋 Мои правила", callback_data="menu:alerts"),
             ],
             [
-                InlineKeyboardButton(text="🗑 Удалить правило", callback_data="menu:delete"),
-                InlineKeyboardButton(text="⏸ Пауза", callback_data="menu:pause"),
-                InlineKeyboardButton(text="▶️ Возобновить", callback_data="menu:resume"),
+                InlineKeyboardButton(
+                    text="▶️ Возобновить" if paused else "⏸ Приостановить",
+                    callback_data="menu:resume" if paused else "menu:pause",
+                )
             ],
-            [InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
+            _back_row(),
         ]
     )
 
@@ -243,6 +261,11 @@ def opportunity_threshold_keyboard() -> InlineKeyboardMarkup:
                     text="От 2% — рекомендуется", callback_data="opportunity:threshold:2"
                 ),
                 InlineKeyboardButton(text="От 3%", callback_data="opportunity:threshold:3"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Своя наценка", callback_data="opportunity:threshold:custom"
+                )
             ],
             _back_row(),
         ]

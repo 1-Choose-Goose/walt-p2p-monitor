@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from enum import StrEnum
 from typing import Any
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -22,6 +22,7 @@ class AdminAction(StrEnum):
     USER = "user"
     PREMIUM = "premium"
     DELETE = "delete"
+    CONFIRM_DELETE = "confirm_delete"
 
 
 class AdminCallback(CallbackData, prefix="admin"):
@@ -80,6 +81,57 @@ def _user_keyboard(user: User, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _list_keyboard(users: Sequence[User], page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{user.first_name or 'Без имени'} · {user.telegram_id}",
+                    callback_data=AdminCallback(
+                        action=AdminAction.OPEN,
+                        target_id=user.telegram_id,
+                        expected_status=user.status,
+                        expected_version=user.version,
+                        page=page,
+                    ).pack(),
+                )
+            ]
+            for user in users
+        ]
+    )
+
+
+def _delete_confirmation(user: User, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить пользователя",
+                    callback_data=AdminCallback(
+                        action=AdminAction.CONFIRM_DELETE,
+                        target_id=user.telegram_id,
+                        expected_status=user.status,
+                        expected_version=user.version,
+                        page=page,
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data=AdminCallback(
+                        action=AdminAction.OPEN,
+                        target_id=user.telegram_id,
+                        expected_status=user.status,
+                        expected_version=user.version,
+                        page=page,
+                    ).pack(),
+                )
+            ],
+        ]
+    )
+
+
 async def apply_admin_action(
     repository: Repository,
     actor_id: int,
@@ -101,7 +153,7 @@ async def apply_admin_action(
         updated = await repository.set_user_role(
             target_id, role, expected_version=expected_version
         )
-    elif action is AdminAction.DELETE:
+    elif action is AdminAction.CONFIRM_DELETE:
         current = await repository.get_user(target_id)
         if (
             current is None
@@ -155,10 +207,46 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
             for user in await repository.list_users(limit=20)
             if user.telegram_id != admin_id
         ]
-        await message.answer(format_user_list(users, page=1))
+        await message.answer(
+            format_user_list(users, page=1), reply_markup=_list_keyboard(users, 0)
+        )
+
+    @router.callback_query(F.data == "menu:admin", flags={"access": AccessRequirement.ADMIN})
+    async def admin_panel_callback(callback: CallbackQuery) -> None:
+        users = [
+            user
+            for user in await repository.list_users(limit=20)
+            if user.telegram_id != admin_id
+        ]
+        if callback.message:
+            await callback.message.edit_text(
+                format_user_list(users, page=1),
+                reply_markup=_list_keyboard(users, 0),
+            )
+        await callback.answer()
 
     @router.callback_query(AdminCallback.filter(), flags={"access": AccessRequirement.ADMIN})
     async def action(callback: CallbackQuery, callback_data: AdminCallback) -> None:
+        current = await repository.get_user(callback_data.target_id)
+        if current is None:
+            await callback.answer("Пользователь уже удалён.", show_alert=True)
+            return
+        if callback_data.action is AdminAction.OPEN:
+            if callback.message:
+                await callback.message.edit_text(
+                    format_user_list([current], page=callback_data.page + 1),
+                    reply_markup=_user_keyboard(current, callback_data.page),
+                )
+            await callback.answer()
+            return
+        if callback_data.action is AdminAction.DELETE:
+            if callback.message:
+                await callback.message.edit_text(
+                    "Удалить пользователя и все его настройки?",
+                    reply_markup=_delete_confirmation(current, callback_data.page),
+                )
+            await callback.answer()
+            return
         try:
             user = await apply_admin_action(
                 repository,

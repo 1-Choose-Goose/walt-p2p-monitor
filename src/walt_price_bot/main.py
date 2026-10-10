@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import logging
-from zoneinfo import ZoneInfo
 
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -11,25 +10,26 @@ from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand
 
 from .access import AccessMiddleware
+from .admin import build_admin_router
 from .config import Settings
 from .credentials import CredentialCipher
 from .exchange import CoinbaseRatesClient
 from .fsm_storage import SQLiteFSMStorage
 from .handlers import build_router
 from .messaging import ReplacingSender
-from .onboarding import migrate_legacy_admin_token
+from .models import SEED_ASSETS
+from .monitoring import UserMarketProviderFactory, monitor_multi_user_forever
+from .onboarding import build_onboarding_router, migrate_legacy_admin_token
+from .preferences import build_preferences_router
 from .repository import ADMIN_TELEGRAM_ID, Repository
-from .runtime import MarketService, monitor_forever
-from .ui import main_menu_keyboard
-from .walt import WaltClient
 
 logger = logging.getLogger(__name__)
 
-BOT_SHORT_DESCRIPTION = "Мониторинг P2P-цен Walt в рублях."
+BOT_SHORT_DESCRIPTION = "Лучшие P2P-цены Walt в рублях."
 BOT_DESCRIPTION = (
-    "Бот мониторит подходящие P2P-предложения Walt для USDT, TON и BTC в рублях, "
-    "показывает биржевой курс Coinbase и уведомляет о расчётно выгодных лотах. "
-    "Нажмите /start, чтобы начать работу."
+    "Следит за P2P-предложениями Walt, сравнивает их с биржевым курсом и сообщает "
+    "о выгодных ценах. Монеты, суммы, способы оплаты и уведомления настраиваются "
+    "индивидуально."
 )
 
 
@@ -48,6 +48,9 @@ async def set_commands_best_effort(bot: Bot) -> None:
                 BotCommand(command="pause", description="Пауза уведомлений"),
                 BotCommand(command="resume", description="Возобновить уведомления"),
                 BotCommand(command="help", description="Справка"),
+                BotCommand(command="token", description="Токен Walt"),
+                BotCommand(command="settings", description="Настройки"),
+                BotCommand(command="admin", description="Пользователи"),
             ]
         )
     except TelegramNetworkError:
@@ -102,21 +105,32 @@ async def run() -> None:
         dispatcher.callback_query.outer_middleware(access_middleware)
 
         async with aiohttp.ClientSession() as session:
-            client = WaltClient(
-                session=session,
-                api_key=settings.walt_api_key.get_secret_value(),
+            factory = UserMarketProviderFactory(
+                session,
+                repository,
+                cipher,
+                CoinbaseRatesClient(session=session),
             )
-            market = MarketService(client, CoinbaseRatesClient(session=session))
-            dispatcher.include_router(build_router(repository, market))
+            dispatcher.include_router(
+                build_onboarding_router(
+                    repository,
+                    cipher,
+                    session,
+                    ADMIN_TELEGRAM_ID,
+                    SEED_ASSETS[1],
+                )
+            )
+            dispatcher.include_router(build_admin_router(repository, ADMIN_TELEGRAM_ID))
+            dispatcher.include_router(build_preferences_router(repository))
+            dispatcher.include_router(build_router(repository, factory))
             await set_commands_best_effort(bot)
             await set_profile_best_effort(bot)
             monitor_task = asyncio.create_task(
-                monitor_forever(
+                monitor_multi_user_forever(
                     repository,
-                    market,
-                    ReplacingSender(bot, repository, reply_markup=main_menu_keyboard()),
-                    interval_seconds=settings.poll_interval_seconds,
-                    schedule_timezone=ZoneInfo(settings.timezone),
+                    factory,
+                    ReplacingSender(bot, repository),
+                    tick_seconds=min(settings.poll_interval_seconds, 15),
                 ),
                 name="walt-monitor",
             )

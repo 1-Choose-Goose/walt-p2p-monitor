@@ -17,6 +17,7 @@ from walt_price_bot.ui import (
     format_market_summary,
     format_opportunity_settings,
     main_menu_keyboard,
+    notifications_menu_keyboard,
     opportunity_mode_keyboard,
     opportunity_threshold_keyboard,
     parse_daily_time,
@@ -121,17 +122,28 @@ def test_main_menu_has_clear_russian_visual_actions() -> None:
 
     assert [button.callback_data for button in buttons] == [
         "menu:price",
-        "menu:opportunity",
-        "menu:alert",
-        "menu:change",
-        "menu:schedule",
-        "menu:alerts",
-        "menu:delete",
-        "menu:pause",
-        "menu:resume",
-        "menu:help",
+        "menu:notifications",
+        "settings:open:",
     ]
+    assert buttons[0].text == "💱 Текущие цены"
     assert all(any("А" <= char <= "я" for char in button.text) for button in buttons)
+
+
+def test_notification_actions_are_grouped_and_markup_is_user_selectable() -> None:
+    buttons = [
+        button
+        for row in notifications_menu_keyboard(paused=False).inline_keyboard
+        for button in row
+    ]
+    callbacks = {button.callback_data for button in buttons}
+    assert {"menu:opportunity", "menu:alert", "menu:change", "menu:schedule"} <= callbacks
+    assert "menu:pause" in callbacks
+    threshold_texts = [
+        button.text
+        for row in opportunity_threshold_keyboard().inline_keyboard
+        for button in row
+    ]
+    assert "Своя наценка" in threshold_texts
 
 
 def test_asset_keyboard_uses_current_walt_p2p_tickers() -> None:
