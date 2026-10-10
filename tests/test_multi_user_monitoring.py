@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
 from walt_price_bot.credentials import CredentialCipher
-from walt_price_bot.models import AccessStatus, QuietHours
+from walt_price_bot.models import AccessStatus, Asset, MarketSnapshot, QuietHours
 from walt_price_bot.monitoring import (
     UserMarketProviderFactory,
     in_quiet_hours,
@@ -16,6 +16,7 @@ from walt_price_bot.monitoring import (
     run_user_cycle,
 )
 from walt_price_bot.repository import Repository
+from walt_price_bot.runtime import run_monitor_cycle
 
 
 def test_quiet_hours_support_midnight_and_normal_ranges() -> None:
@@ -30,6 +31,37 @@ def test_one_minute_summary_is_due_and_restart_safe() -> None:
     assert interval_summary_is_due(None, now, 1)
     assert not interval_summary_is_due((now - timedelta(seconds=59)).isoformat(), now, 1)
     assert interval_summary_is_due((now - timedelta(minutes=1)).isoformat(), now, 1)
+
+
+@pytest.mark.asyncio
+async def test_summary_never_includes_unselected_provider_assets(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    await repository.replace_user_assets(768929900, (Asset.GRAM, Asset.USDT))
+    await repository.update_preferences(
+        768929900, summary_enabled=True, summary_interval_minutes=1
+    )
+    provider = AsyncMock()
+    provider.get_snapshots.return_value = [
+        MarketSnapshot(asset=asset, buy=None, sell=None)
+        for asset in (Asset.GRAM, Asset.USDT, Asset.BTC, Asset.NOT, Asset.ETH)
+    ]
+    sender = AsyncMock()
+
+    await run_monitor_cycle(
+        repository,
+        provider,
+        sender,
+        datetime.now(UTC),
+        telegram_id=768929900,
+    )
+
+    text = sender.send_message.await_args.args[1]
+    assert "GRAM / RUB" in text
+    assert "USDT / RUB" in text
+    assert "BTC / RUB" not in text
+    assert "NOT / RUB" not in text
+    assert "ETH / RUB" not in text
 
 
 @pytest.mark.asyncio

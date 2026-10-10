@@ -13,7 +13,9 @@ from .access import AccessRequirement
 from .keyboards import SETTINGS_BUTTON
 from .messaging import DeleteIncomingMessagesMiddleware
 from .models import Asset, QuoteSide, UserPreferences
+from .onboarding import WELCOME
 from .repository import Repository
+from .ui import main_menu_keyboard
 
 
 class SettingsAction(StrEnum):
@@ -186,6 +188,28 @@ def _choice_keyboard(
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def return_to_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if callback.message:
+        await callback.message.edit_text(WELCOME, reply_markup=main_menu_keyboard())
+    await callback.answer()
+
+
+async def show_quiet_hours(callback: CallbackQuery) -> None:
+    if callback.message:
+        await callback.message.edit_text(
+            "🌙 <b>Тихие часы</b>",
+            reply_markup=_choice_keyboard(
+                [
+                    ("Выключить", SettingsAction.QUIET_SET, "off"),
+                    ("22:00–08:00", SettingsAction.QUIET_SET, "2200-0800"),
+                    ("23:00–07:00", SettingsAction.QUIET_SET, "2300-0700"),
+                ]
+            ),
+        )
+    await callback.answer()
 
 
 async def assets_keyboard(repository: Repository, telegram_id: int) -> InlineKeyboardMarkup:
@@ -365,23 +389,15 @@ def build_preferences_router(repository: Repository) -> Router:
                 telegram_id, **{f"notify_{field}": not values[field]}
             )
             await callback.answer("Сохранено")
-        elif action is SettingsAction.QUIET and callback.message:
-            await callback.message.edit_text(
-                "🌙 <b>Тихие часы</b>",
-                reply_markup=_choice_keyboard(
-                    [
-                        ("Выключить", SettingsAction.QUIET_SET, "off"),
-                        ("22:00–08:00", SettingsAction.QUIET_SET, "22:00-08:00"),
-                        ("23:00–07:00", SettingsAction.QUIET_SET, "23:00-07:00"),
-                    ]
-                ),
-            )
-            await callback.answer()
+        elif action is SettingsAction.QUIET:
+            await show_quiet_hours(callback)
         elif action is SettingsAction.QUIET_SET:
             if callback_data.value == "off":
                 await repository.update_preferences(telegram_id, quiet_enabled=False)
             else:
                 start, end = callback_data.value.split("-", 1)
+                start = f"{start[:2]}:{start[2:]}"
+                end = f"{end[:2]}:{end[2:]}"
                 await repository.update_preferences(
                     telegram_id, quiet_enabled=True, quiet_start=start, quiet_end=end
                 )
@@ -399,6 +415,8 @@ def build_preferences_router(repository: Repository) -> Router:
         elif action is SettingsAction.RESET:
             await repository.reset_preferences(telegram_id)
             await show_settings(callback)
+        elif action is SettingsAction.HOME:
+            await return_to_main_menu(callback, state)
         elif action is SettingsAction.LIMIT and not callback_data.value and callback.message:
             await callback.message.edit_text(
                 "💵 <b>Допустимый минимальный лимит объявления</b>",

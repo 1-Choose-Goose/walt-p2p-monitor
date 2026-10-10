@@ -54,6 +54,26 @@ async def test_registration_is_unique_and_notifies_admin_once(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_existing_admin_can_bind_native_phone(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    sender = SimpleNamespace(
+        id=ADMIN_TELEGRAM_ID, first_name="Администратор", username=None
+    )
+
+    result = await register_contact(
+        repository,
+        contact(phone="8 (999) 000-00-99", user_id=ADMIN_TELEGRAM_ID),
+        sender,
+    )
+
+    admin = await repository.get_user(ADMIN_TELEGRAM_ID)
+    assert admin.phone == "+79990000099"
+    assert admin.status is AccessStatus.ACTIVE
+    assert result.notify_admin is False
+
+
+@pytest.mark.asyncio
 async def test_approval_then_successful_token_activation_is_encrypted(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()

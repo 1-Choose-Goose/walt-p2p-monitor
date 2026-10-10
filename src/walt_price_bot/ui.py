@@ -8,6 +8,7 @@ from .models import (
     SEED_ASSETS,
     AlertKind,
     AlertRule,
+    Asset,
     MarketSnapshot,
     OpportunityMode,
     OpportunitySettings,
@@ -67,7 +68,10 @@ def parse_daily_time(value: str) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
-def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
+def format_market_summary(
+    snapshots: list[MarketSnapshot],
+    expected_assets: list[Asset] | tuple[Asset, ...] | set[Asset] | None = None,
+) -> str:
     blocks = ["📊 <b>Walt P2P — актуальные цены</b>"]
     for snapshot in snapshots:
         lines = [f"\n<b>{snapshot.asset.value} / RUB</b>"]
@@ -97,8 +101,12 @@ def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
             )
         blocks.append("\n".join(lines))
     available = {snapshot.asset for snapshot in snapshots}
-    for entry in SEED_ASSETS:
-        asset = entry.symbol
+    expected = (
+        [entry.symbol for entry in SEED_ASSETS]
+        if expected_assets is None
+        else expected_assets
+    )
+    for asset in expected:
         if asset not in available:
             blocks.append(f"\n<b>{asset.value} / RUB</b>\nПодходящих онлайн-объявлений сейчас нет.")
     return "\n".join(blocks)

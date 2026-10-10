@@ -1,5 +1,7 @@
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -9,6 +11,8 @@ from walt_price_bot.preferences import (
     SettingsCallback,
     format_preferences,
     parse_money,
+    return_to_main_menu,
+    show_quiet_hours,
     summary_interval_minutes,
     toggle_asset,
 )
@@ -86,3 +90,39 @@ def test_typed_settings_callback_round_trip() -> None:
     unpacked = SettingsCallback.unpack(packed)
     assert unpacked.action is SettingsAction.LIMIT
     assert unpacked.value == "2000"
+
+
+@pytest.mark.asyncio
+async def test_settings_home_button_restores_main_menu() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+
+    await return_to_main_menu(callback, state)
+
+    state.clear.assert_awaited_once()
+    callback.message.edit_text.assert_awaited_once()
+    markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].text == "💱 Текущие цены"
+    callback.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_quiet_hours_button_opens_presets() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    await show_quiet_hours(callback)
+
+    callback.message.edit_text.assert_awaited_once()
+    markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert [row[0].text for row in markup.inline_keyboard[:-1]] == [
+        "Выключить",
+        "22:00–08:00",
+        "23:00–07:00",
+    ]
+    callback.answer.assert_awaited_once()

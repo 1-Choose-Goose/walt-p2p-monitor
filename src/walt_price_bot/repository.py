@@ -96,11 +96,6 @@ class Repository:
     ) -> User:
         if telegram_id <= 0:
             raise ValueError("telegram_id must be positive")
-        if telegram_id == ADMIN_TELEGRAM_ID:
-            user = await self.get_user(telegram_id)
-            if user is None:
-                raise RuntimeError("administrator is not initialized")
-            return user
         async with self.user_lock(telegram_id), self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             try:

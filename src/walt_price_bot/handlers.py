@@ -136,9 +136,10 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             sell_payments=preferences.sell_payments,
         )
         try:
-            return await provider.get_snapshots(assets, filters)
+            snapshots = await provider.get_snapshots(assets, filters)
         except TypeError:
-            return await provider.get_snapshots()
+            snapshots = await provider.get_snapshots()
+        return [snapshot for snapshot in snapshots if snapshot.asset in selected]
 
     async def user_asset_keyboard(prefix: str, telegram_id: int):
         selected = set(await repository.get_user_assets(telegram_id))
@@ -175,7 +176,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         await replace_message(
             message,
             repository,
-            format_market_summary(snapshots),
+            format_market_summary(
+                snapshots, [snapshot.asset for snapshot in snapshots]
+            ),
             reply_markup=main_menu_keyboard(),
         )
 
@@ -494,7 +497,10 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if not await owner_required(callback, repository):
             return
         try:
-            text = format_market_summary(await snapshots_for(callback.from_user.id))
+            snapshots = await snapshots_for(callback.from_user.id)
+            text = format_market_summary(
+                snapshots, [snapshot.asset for snapshot in snapshots]
+            )
         except Exception:
             text = "⚠️ Не удалось получить цены Walt. Повторите немного позже."
         await update_callback(callback, text, main_menu_keyboard())

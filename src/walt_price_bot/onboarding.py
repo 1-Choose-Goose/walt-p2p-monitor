@@ -181,6 +181,12 @@ def build_onboarding_router(
         if user is not None:
             await state.clear()
         if user and user.status is AccessStatus.ACTIVE:
+            if not user.phone:
+                await message.answer(
+                    "Подтвердите номер телефона, чтобы завершить привязку аккаунта.",
+                    reply_markup=phone_request_keyboard(),
+                )
+                return
             await message.answer(
                 WELCOME,
                 reply_markup=main_navigation_keyboard(user.role),
@@ -207,10 +213,17 @@ def build_onboarding_router(
         except ValueError as exc:
             await message.answer(str(exc), reply_markup=phone_request_keyboard())
             return
-        await message.answer(
-            "✅ Номер подтверждён. Заявка отправлена администратору.",
-            reply_markup=remove_reply_keyboard(),
-        )
+        account = await repository.get_user(message.from_user.id)
+        if account and account.status is AccessStatus.ACTIVE:
+            await message.answer(
+                "✅ Номер подтверждён и привязан к аккаунту.",
+                reply_markup=main_navigation_keyboard(account.role),
+            )
+        else:
+            await message.answer(
+                "✅ Номер подтверждён. Заявка отправлена администратору.",
+                reply_markup=remove_reply_keyboard(),
+            )
         if result.notify_admin:
             username = (
                 f"@{message.from_user.username}"

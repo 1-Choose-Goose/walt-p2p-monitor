@@ -181,7 +181,7 @@ async def run_monitor_cycle(
     snapshots = [
         snapshot
         for snapshot in fetched
-        if _snapshot_is_fresh(snapshot, now)
+        if snapshot.asset in selected and _snapshot_is_fresh(snapshot, now)
     ]
     by_asset = {snapshot.asset: snapshot for snapshot in snapshots}
 
@@ -291,7 +291,12 @@ async def run_monitor_cycle(
         if not schedule_is_due(schedule, now, timezone=schedule_timezone):
             continue
         try:
-            await sender.send_message(telegram_id, format_market_summary(snapshots))
+            await sender.send_message(
+                telegram_id,
+                format_market_summary(
+                    snapshots, tuple(entry.symbol for entry in assets)
+                ),
+            )
             await repository.mark_schedule_sent(
                 telegram_id, schedule.id, now.astimezone(UTC).isoformat()
             )
@@ -306,7 +311,12 @@ async def run_monitor_cycle(
             last_summary, now, preferences.summary_interval_minutes
         ):
             try:
-                await sender.send_message(telegram_id, format_market_summary(snapshots))
+                await sender.send_message(
+                    telegram_id,
+                    format_market_summary(
+                        snapshots, tuple(entry.symbol for entry in assets)
+                    ),
+                )
                 await repository.mark_summary_sent(
                     telegram_id, now.astimezone(UTC).isoformat()
                 )
