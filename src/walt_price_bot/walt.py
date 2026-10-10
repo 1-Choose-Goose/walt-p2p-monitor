@@ -1,11 +1,14 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from typing import Any
 
 import aiohttp
+from pydantic import SecretStr
 
-from .models import Asset, P2PAd, QuoteSide
+from .models import Asset, AssetCatalogEntry, P2PAd, QuoteSide
 
 WALT_API_URL = "https://p2p.walletbot.me/p2p/integration-api/v1/item/online"
 RETRYABLE_STATUSES = {429, 503}
@@ -13,6 +16,63 @@ RETRYABLE_STATUSES = {429, 503}
 
 class WaltAPIError(RuntimeError):
     pass
+
+
+class TokenValidationStatus(StrEnum):
+    VALID = "VALID"
+    INVALID = "INVALID"
+    TRANSIENT = "TRANSIENT"
+
+
+@dataclass(frozen=True, slots=True)
+class TokenValidationResult:
+    status: TokenValidationStatus
+
+
+async def validate_walt_token(
+    session: Any,
+    token: SecretStr,
+    probe_asset: AssetCatalogEntry,
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    max_attempts: int = 3,
+) -> TokenValidationResult:
+    """Validate a token without ever returning or logging its value."""
+
+    payload = {
+        "cryptoCurrency": probe_asset.walt_code,
+        "fiatCurrency": "RUB",
+        "side": QuoteSide.SELL.value,
+        "page": 1,
+        "pageSize": 1,
+    }
+    headers = {
+        "X-API-Key": token.get_secret_value(),
+        "accept": "application/json",
+    }
+    timeout = aiohttp.ClientTimeout(total=10)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with session.post(
+                WALT_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+                allow_redirects=False,
+            ) as response:
+                if response.status in {401, 403}:
+                    return TokenValidationResult(TokenValidationStatus.INVALID)
+                if response.status == 200:
+                    body = await response.json()
+                    if isinstance(body, dict) and body.get("status") == "SUCCESS":
+                        return TokenValidationResult(TokenValidationStatus.VALID)
+                if response.status not in RETRYABLE_STATUSES:
+                    return TokenValidationResult(TokenValidationStatus.TRANSIENT)
+        except (aiohttp.ClientError, TimeoutError):
+            pass
+        if attempt < max_attempts:
+            await sleep(float(2 ** (attempt - 1)))
+    return TokenValidationResult(TokenValidationStatus.TRANSIENT)
 
 
 class WaltClient:

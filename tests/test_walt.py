@@ -1,9 +1,15 @@
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
-from walt_price_bot.models import Asset, QuoteSide
-from walt_price_bot.walt import WaltAPIError, WaltClient
+from walt_price_bot.models import SEED_ASSETS, Asset, QuoteSide
+from walt_price_bot.walt import (
+    TokenValidationStatus,
+    WaltAPIError,
+    WaltClient,
+    validate_walt_token,
+)
 
 VALID_AD = {
     "id": "12345",
@@ -155,3 +161,35 @@ async def test_fetch_ads_uses_bounded_pagination() -> None:
 
     assert len(ads) == 51
     assert [call["json"]["page"] for call in session.calls] == [1, 2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_token_validation_rejects_auth_errors_without_retry(status: int) -> None:
+    session = FakeSession([FakeResponse(status, {"status": "ERROR"})])
+
+    result = await validate_walt_token(
+        session, SecretStr("secret-token"), SEED_ASSETS[1], sleep=no_sleep
+    )
+
+    assert result.status is TokenValidationStatus.INVALID
+    assert len(session.calls) == 1
+    assert "secret-token" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_token_validation_retries_transient_failure() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(503, {"status": "ERROR"}),
+            FakeResponse(200, {"status": "SUCCESS", "data": []}),
+        ]
+    )
+
+    result = await validate_walt_token(
+        session, SecretStr("secret-token"), SEED_ASSETS[1], sleep=no_sleep
+    )
+
+    assert result.status is TokenValidationStatus.VALID
+    assert len(session.calls) == 2
+    assert session.calls[0]["json"]["cryptoCurrency"] == "USDT"

@@ -1,0 +1,238 @@
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from aiogram import F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, Contact, Message
+from pydantic import SecretStr
+
+from .access import AccessRequirement
+from .credentials import CredentialCipher
+from .keyboards import phone_request_keyboard, remove_reply_keyboard
+from .models import AccessStatus, AssetCatalogEntry
+from .repository import ADMIN_TELEGRAM_ID, Repository
+from .walt import TokenValidationResult, TokenValidationStatus, validate_walt_token
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationResult:
+    notify_admin: bool
+
+
+class TokenFlow(StatesGroup):
+    token = State()
+
+
+def normalize_phone(contact: Contact, sender_id: int) -> str:
+    if contact.user_id is None:
+        raise ValueError("Отправьте контакт Telegram кнопкой ниже.")
+    if contact.user_id != sender_id:
+        raise ValueError("Можно отправить только свой контакт Telegram.")
+    digits = re.sub(r"\D", "", contact.phone_number)
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    if not 10 <= len(digits) <= 15:
+        raise ValueError("В контакте указан некорректный номер телефона.")
+    return "+" + digits
+
+
+async def register_contact(
+    repository: Repository, contact: Contact, sender: Any
+) -> RegistrationResult:
+    phone = normalize_phone(contact, sender.id)
+    previous = await repository.get_user(sender.id)
+    await repository.create_or_refresh_request(
+        sender.id,
+        phone=phone,
+        first_name=getattr(sender, "first_name", None),
+        username=getattr(sender, "username", None),
+    )
+    return RegistrationResult(
+        notify_admin=previous is None or previous.status is AccessStatus.REJECTED
+    )
+
+
+async def approve_access(repository: Repository, telegram_id: int) -> None:
+    await repository.transition_user(
+        telegram_id,
+        expected=AccessStatus.PENDING,
+        new_status=AccessStatus.AWAITING_TOKEN,
+    )
+
+
+async def activate_user_token(
+    repository: Repository,
+    cipher: CredentialCipher,
+    validator: Callable[
+        [Any, SecretStr, AssetCatalogEntry], Awaitable[TokenValidationResult]
+    ],
+    telegram_id: int,
+    token: SecretStr,
+    probe_asset: AssetCatalogEntry,
+    *,
+    session: Any = None,
+) -> TokenValidationResult:
+    result = await validator(session, token, probe_asset)
+    if result.status is not TokenValidationStatus.VALID:
+        return result
+    encrypted = cipher.encrypt(token.get_secret_value())
+    user = await repository.get_user(telegram_id)
+    if user is None:
+        raise ValueError("user does not exist")
+    await repository.set_encrypted_credential(telegram_id, encrypted)
+    if user.status is AccessStatus.AWAITING_TOKEN:
+        await repository.transition_user(
+            telegram_id,
+            expected=AccessStatus.AWAITING_TOKEN,
+            new_status=AccessStatus.ACTIVE,
+        )
+    return result
+
+
+async def process_token_message(
+    message: Any,
+    repository: Repository,
+    cipher: CredentialCipher,
+    validator: Callable[
+        [Any, SecretStr, AssetCatalogEntry], Awaitable[TokenValidationResult]
+    ],
+    telegram_id: int,
+    probe_asset: AssetCatalogEntry,
+    *,
+    session: Any = None,
+) -> TokenValidationResult:
+    try:
+        result = await activate_user_token(
+            repository,
+            cipher,
+            validator,
+            telegram_id,
+            SecretStr(message.text or ""),
+            probe_asset,
+            session=session,
+        )
+    finally:
+        await message.delete()
+    if result.status is TokenValidationStatus.VALID:
+        await message.answer("✅ Токен Walt сохранён. Доступ к функциям открыт.")
+    elif result.status is TokenValidationStatus.INVALID:
+        await message.answer("❌ Токен Walt не принят. Проверьте его и попробуйте снова.")
+    else:
+        await message.answer("⚠️ Walt временно недоступен. Токен не изменён, попробуйте позже.")
+    return result
+
+
+async def migrate_legacy_admin_token(
+    repository: Repository,
+    cipher: CredentialCipher,
+    legacy_token: SecretStr | None,
+) -> bool:
+    if legacy_token is None or await repository.get_encrypted_credential(ADMIN_TELEGRAM_ID):
+        return False
+    await repository.set_encrypted_credential(
+        ADMIN_TELEGRAM_ID, cipher.encrypt(legacy_token.get_secret_value())
+    )
+    return True
+
+
+def build_onboarding_router(
+    repository: Repository,
+    cipher: CredentialCipher,
+    session: Any,
+    admin_id: int,
+    probe_asset: AssetCatalogEntry,
+) -> Router:
+    if admin_id != ADMIN_TELEGRAM_ID:
+        raise ValueError("administrator id cannot be overridden")
+    router = Router(name="onboarding")
+
+    @router.message(Command("start"), flags={"access": AccessRequirement.PUBLIC})
+    async def start(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        user = await repository.get_user(message.from_user.id)
+        if user and user.status is AccessStatus.ACTIVE:
+            await message.answer("Главное меню")
+            return
+        if user and user.status is AccessStatus.PENDING:
+            await message.answer("Заявка уже отправлена и ожидает решения.")
+            return
+        if user and user.status is AccessStatus.AWAITING_TOKEN:
+            await state.set_state(TokenFlow.token)
+            await message.answer("Отправьте токен Walt одним сообщением.")
+            return
+        await message.answer(
+            "Чтобы отправить заявку, подтвердите номер телефона.",
+            reply_markup=phone_request_keyboard(),
+        )
+
+    @router.message(F.contact, flags={"access": AccessRequirement.PUBLIC})
+    async def receive_contact(message: Message) -> None:
+        try:
+            result = await register_contact(
+                repository, message.contact, message.from_user
+            )
+        except ValueError as exc:
+            await message.answer(str(exc), reply_markup=phone_request_keyboard())
+            return
+        await message.answer(
+            "✅ Номер подтверждён. Заявка отправлена администратору.",
+            reply_markup=remove_reply_keyboard(),
+        )
+        if result.notify_admin:
+            username = (
+                f"@{message.from_user.username}"
+                if message.from_user.username
+                else "без username"
+            )
+            await message.bot.send_message(
+                admin_id,
+                f"Новая заявка: {message.from_user.full_name} "
+                f"({username}), ID {message.from_user.id}.",
+            )
+
+    @router.callback_query(
+        F.data.startswith("access:approve:"),
+        flags={"access": AccessRequirement.PUBLIC},
+    )
+    async def approve(callback: CallbackQuery) -> None:
+        if callback.from_user.id != admin_id:
+            await callback.answer("Недостаточно прав.", show_alert=True)
+            return
+        target_id = int(callback.data.rsplit(":", 1)[1])
+        await approve_access(repository, target_id)
+        await callback.bot.send_message(
+            target_id, "✅ Доступ одобрен. Теперь отправьте токен Walt командой /token."
+        )
+        await callback.answer("Доступ одобрен")
+
+    @router.message(Command("token"), flags={"access": AccessRequirement.PUBLIC})
+    async def token_command(message: Message, state: FSMContext) -> None:
+        user = await repository.get_user(message.from_user.id)
+        if user is None or user.status not in {
+            AccessStatus.AWAITING_TOKEN,
+            AccessStatus.ACTIVE,
+        }:
+            await message.answer("Сначала получите доступ у администратора.")
+            return
+        await state.set_state(TokenFlow.token)
+        await message.answer("Отправьте токен Walt одним сообщением. Сообщение будет удалено.")
+
+    @router.message(TokenFlow.token, F.text, flags={"access": AccessRequirement.PUBLIC})
+    async def receive_token(message: Message, state: FSMContext) -> None:
+        result = await process_token_message(
+            message,
+            repository,
+            cipher,
+            validate_walt_token,
+            message.from_user.id,
+            probe_asset,
+            session=session,
+        )
+        if result.status is TokenValidationStatus.VALID:
+            await state.clear()
+
+    return router

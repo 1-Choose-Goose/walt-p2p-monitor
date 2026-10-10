@@ -12,10 +12,12 @@ from aiogram.types import BotCommand
 
 from .access import AccessMiddleware
 from .config import Settings
+from .credentials import CredentialCipher
 from .exchange import CoinbaseRatesClient
 from .fsm_storage import SQLiteFSMStorage
 from .handlers import build_router
 from .messaging import ReplacingSender
+from .onboarding import migrate_legacy_admin_token
 from .repository import ADMIN_TELEGRAM_ID, Repository
 from .runtime import MarketService, monitor_forever
 from .ui import main_menu_keyboard
@@ -84,6 +86,8 @@ async def run() -> None:
     )
     repository = Repository(settings.database_path)
     await repository.initialize()
+    cipher = CredentialCipher(settings.credential_encryption_key)
+    await migrate_legacy_admin_token(repository, cipher, settings.walt_api_key)
     if settings.owner_telegram_id is not None:
         await repository.set_configured_owner(settings.owner_telegram_id)
 
