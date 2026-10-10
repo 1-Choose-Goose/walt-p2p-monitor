@@ -37,6 +37,22 @@ async def set_commands_best_effort(bot: Bot) -> None:
         logger.warning("Telegram command menu registration postponed after network error")
 
 
+async def start_polling_resilient(
+    dispatcher: Dispatcher,
+    bot: Bot,
+    *,
+    allowed_updates: list[str],
+    retry_delay: float = 10,
+) -> None:
+    while True:
+        try:
+            await dispatcher.start_polling(bot, allowed_updates=allowed_updates)
+            return
+        except TelegramNetworkError:
+            logger.warning("Telegram polling connection failed; retrying")
+            await asyncio.sleep(retry_delay)
+
+
 async def run() -> None:
     settings = Settings()
     logging.basicConfig(
@@ -73,8 +89,10 @@ async def run() -> None:
                 name="walt-monitor",
             )
             try:
-                await dispatcher.start_polling(
-                    bot, allowed_updates=dispatcher.resolve_used_update_types()
+                await start_polling_resilient(
+                    dispatcher,
+                    bot,
+                    allowed_updates=dispatcher.resolve_used_update_types(),
                 )
             finally:
                 monitor_task.cancel()
