@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "walt-price-bot"
-version = "1.4.0"
-description = "Owner-only Telegram monitor for Walt P2P RUB prices"
+version = "1.5.0"
+description = "Multi-user Telegram monitor for Walt P2P RUB prices"
 requires-python = ">=3.12"
 dependencies = [
   "aiogram==3.31.0",

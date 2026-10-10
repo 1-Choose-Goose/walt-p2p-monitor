@@ -47,3 +47,12 @@ def test_installer_generates_encryption_key_once_and_protects_env_file() -> None
     assert 'printf "\\nCREDENTIAL_ENCRYPTION_KEY=%s\\n"' in text
     assert 'chmod 0600 "${env_file}"' in text
     assert "set -x" not in text
+
+
+def test_release_assets_are_lf_and_service_is_restarted() -> None:
+    installer = (ROOT / "deploy" / "install.sh").read_bytes()
+    service = (ROOT / "deploy" / "walt-price-bot.service").read_bytes()
+
+    assert b"\r\n" not in installer
+    assert b"\r\n" not in service
+    assert b"systemctl enable --now walt-price-bot.service" in installer
