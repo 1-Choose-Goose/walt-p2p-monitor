@@ -25,13 +25,14 @@ def quote(identifier: str, side: QuoteSide, price: str) -> P2PAd:
         rating=Decimal("0.9875"),
         is_online=True,
         number="A1B2C3",
+        user_id="423113846849714",
     )
 
 
 def test_market_summary_shows_ruble_buy_sell_and_offer_details() -> None:
     snapshot = MarketSnapshot(
         asset=Asset.USDT,
-        buy=quote("sell-ad", QuoteSide.SELL, "89.50"),
+        buy=quote("11668659858949", QuoteSide.SELL, "89.50"),
         sell=quote("buy-ad", QuoteSide.BUY, "90.10"),
     )
 
@@ -43,8 +44,11 @@ def test_market_summary_shows_ruble_buy_sell_and_offer_details() -> None:
     assert "1 000–50 000 ₽" in text
     assert "Сбербанк, Т-Банк" in text
     assert "Trader" in text
-    assert 'href="https://t.me/walt/start?startapp=p2p"' in text
-    assert "Открыть P2P-маркет" in text
+    assert (
+        'href="https://telegram.me/walt/start?startapp='
+        'v2-b3BlcmF0aW9uPW9mZmVyaWRfMTE2Njg2NTk4NTg5NDlfNDIzMTEzODQ2ODQ5NzE0"' in text
+    )
+    assert "Открыть объявление" in text
     assert "Объявление №A1B2C3" in text
 
 
@@ -52,6 +56,7 @@ def test_market_summary_escapes_untrusted_walt_text() -> None:
     unsafe = quote("sell-ad", QuoteSide.SELL, "89.50")
     unsafe = P2PAd(
         id=unsafe.id,
+        user_id=unsafe.user_id,
         nickname="<b>fake</b>",
         asset=unsafe.asset,
         side=unsafe.side,

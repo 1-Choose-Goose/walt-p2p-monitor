@@ -74,6 +74,7 @@ async def test_fetch_ads_sends_documented_rub_payload_and_parses_decimal() -> No
     assert str(ads[0].price) == "98.50"
     assert ads[0].payments == ("sberbank", "tinkoff")
     assert ads[0].number == "A1B2C3"
+    assert ads[0].user_id == "67890"
 
 
 @pytest.mark.asyncio

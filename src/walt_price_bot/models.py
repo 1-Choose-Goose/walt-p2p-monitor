@@ -32,6 +32,7 @@ class ScheduleKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class P2PAd:
     id: str
+    user_id: str
     nickname: str
     asset: Asset
     side: QuoteSide

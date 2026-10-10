@@ -20,6 +20,7 @@ from walt_price_bot.runtime import MarketService, run_monitor_cycle
 def ad(asset: Asset, side: QuoteSide, price: str) -> P2PAd:
     return P2PAd(
         id=f"{asset}-{side}",
+        user_id="67890",
         nickname="maker",
         asset=asset,
         side=side,
@@ -119,7 +120,10 @@ async def test_monitor_uses_one_snapshot_for_multiple_rules_and_commits_success(
     assert provider.calls == 1
     assert len(sender.messages) == 2
     assert all("ниже или равно" in text for _, text in sender.messages)
-    assert all('href="https://t.me/walt/start?startapp=p2p"' in text for _, text in sender.messages)
+    assert all(
+        'href="https://telegram.me/walt/start?startapp=v2-' in text
+        for _, text in sender.messages
+    )
     assert all(rule.armed is False for rule in await repository.list_alerts())
 
 

@@ -98,12 +98,14 @@ class WaltClient:
             raise WaltAPIError("invalid payments in Walt ad")
         try:
             identifier = str(item["id"])
+            user_id = str(item["userId"])
             nickname = str(item["nickname"])
             number = str(item["number"])
         except KeyError as exc:
             raise WaltAPIError("missing Walt ad identity") from exc
         return P2PAd(
             id=identifier,
+            user_id=user_id,
             nickname=nickname,
             asset=asset,
             side=side,

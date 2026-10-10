@@ -17,6 +17,7 @@ def ad(
 ) -> P2PAd:
     return P2PAd(
         id=identifier,
+        user_id="67890",
         nickname="maker",
         asset=Asset.USDT,
         side=side,

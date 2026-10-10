@@ -1,3 +1,4 @@
+import base64
 from decimal import Decimal, InvalidOperation
 from html import escape
 
@@ -5,7 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .models import AlertKind, AlertRule, Asset, MarketSnapshot, P2PAd, ScheduleRule
 
-WALT_P2P_URL = "https://t.me/walt/start?startapp=p2p"
+WALT_MINI_APP_URL = "https://telegram.me/walt/start?startapp="
 PAYMENT_NAMES = {
     "akbarsbank": "Ак Барс Банк",
     "alfabank": "Альфа-Банк",
@@ -188,11 +189,18 @@ def _offer_details(ad: P2PAd) -> str:
         escape(PAYMENT_NAMES.get(payment.lower(), payment)) for payment in ad.payments
     )
     ad_number = escape(ad.number or ad.id)
+    offer_url = escape(_walt_offer_url(ad), quote=True)
     return (
         f"   {nickname} · {_money(ad.min_amount)}–{_money(ad.max_amount)} ₽\n"
         f"   {payments or 'способ оплаты не указан'}\n"
-        f'   🔗 <a href="{WALT_P2P_URL}">Открыть P2P-маркет</a> · Объявление №{ad_number}'
+        f'   🔗 <a href="{offer_url}">Открыть объявление</a> · Объявление №{ad_number}'
     )
+
+
+def _walt_offer_url(ad: P2PAd) -> str:
+    operation = f"operation=offerid_{ad.id}_{ad.user_id}"
+    payload = base64.urlsafe_b64encode(operation.encode()).decode().rstrip("=")
+    return f"{WALT_MINI_APP_URL}v2-{payload}"
 
 
 def _money(value: Decimal) -> str:
