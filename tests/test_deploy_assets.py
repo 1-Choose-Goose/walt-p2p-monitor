@@ -30,5 +30,6 @@ def test_installer_force_reinstalls_updated_application_package() -> None:
     text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
 
     assert "--force-reinstall --no-deps" in text
-    assert 'rm -rf "${app_dir}/src"' in text
+    assert 'rm -rf "${app_dir}/build" "${app_dir}/src"' in text
     assert 'cp -a "${source_dir}/src" "${app_dir}/src"' in text
+    assert "-name '*.egg-info' -exec rm -rf" in text
