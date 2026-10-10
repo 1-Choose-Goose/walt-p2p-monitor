@@ -22,8 +22,10 @@ fi
 
 install -d -m 0755 -o root -g root "${app_dir}"
 install -d -m 0700 -o waltbot -g waltbot "${data_dir}"
+rm -rf "${app_dir}/src"
 cp -a "${source_dir}/pyproject.toml" "${source_dir}/uv.lock" \
-  "${source_dir}/requirements.lock" "${source_dir}/src" "${app_dir}/"
+  "${source_dir}/requirements.lock" "${app_dir}/"
+cp -a "${source_dir}/src" "${app_dir}/src"
 python3 -m venv "${app_dir}/.venv"
 "${app_dir}/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
   --require-hashes -r "${app_dir}/requirements.lock"
