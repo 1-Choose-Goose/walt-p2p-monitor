@@ -55,17 +55,28 @@ def parse_daily_time(value: str) -> str:
 def format_market_summary(snapshots: list[MarketSnapshot]) -> str:
     blocks = ["📊 <b>Walt P2P — лучшие цены</b>"]
     for snapshot in snapshots:
-        blocks.append(
-            "\n".join(
+        lines = [f"\n<b>{snapshot.asset.value} / RUB</b>"]
+        if snapshot.exchange_price is not None:
+            lines.append(f"🏦 Биржевой курс (Coinbase): {_money(snapshot.exchange_price)} ₽")
+        if snapshot.buy is None:
+            lines.append("🟢 Купить: подходящих P2P-объявлений нет")
+        else:
+            lines.extend(
                 [
-                    f"\n<b>{snapshot.asset.value} / RUB</b>",
                     f"🟢 Купить: {_money(snapshot.buy.price)} ₽",
                     _offer_details(snapshot.buy),
+                ]
+            )
+        if snapshot.sell is None:
+            lines.append("🔵 Продать: подходящих P2P-объявлений нет")
+        else:
+            lines.extend(
+                [
                     f"🔵 Продать: {_money(snapshot.sell.price)} ₽",
                     _offer_details(snapshot.sell),
                 ]
             )
-        )
+        blocks.append("\n".join(lines))
     available = {snapshot.asset for snapshot in snapshots}
     for asset in Asset:
         if asset not in available:
@@ -105,7 +116,8 @@ def asset_keyboard(prefix: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="USDT", callback_data=f"{prefix}:asset:USDT"),
                 InlineKeyboardButton(text="TON", callback_data=f"{prefix}:asset:TON"),
                 InlineKeyboardButton(text="Биткоин", callback_data=f"{prefix}:asset:BTC"),
-            ]
+            ],
+            _back_row(),
         ]
     )
 
@@ -140,7 +152,8 @@ def side_keyboard(prefix: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Купить", callback_data=f"{prefix}:side:BUY"),
                 InlineKeyboardButton(text="Продать", callback_data=f"{prefix}:side:SELL"),
-            ]
+            ],
+            _back_row(),
         ]
     )
 
@@ -151,7 +164,8 @@ def direction_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Выше или равно", callback_data="alert:direction:above"),
                 InlineKeyboardButton(text="Ниже или равно", callback_data="alert:direction:below"),
-            ]
+            ],
+            _back_row(),
         ]
     )
 
@@ -162,7 +176,8 @@ def schedule_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Через N часов", callback_data="schedule:kind:interval"),
                 InlineKeyboardButton(text="Ежедневно", callback_data="schedule:kind:daily"),
-            ]
+            ],
+            _back_row(),
         ]
     )
 
@@ -180,7 +195,16 @@ def delete_keyboard(alerts: list[AlertRule], schedules: list[ScheduleRule]) -> I
         ]
         for rule in schedules
     )
+    buttons.append(_back_row())
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[_back_row()])
+
+
+def _back_row() -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="menu:home")]
 
 
 def _offer_details(ad: P2PAd) -> str:

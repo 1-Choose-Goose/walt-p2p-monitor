@@ -3,12 +3,36 @@ import logging
 import pytest
 from aiogram.exceptions import TelegramNetworkError
 
-from walt_price_bot.main import set_commands_best_effort, start_polling_resilient
+from walt_price_bot.main import (
+    set_commands_best_effort,
+    set_profile_best_effort,
+    start_polling_resilient,
+)
 
 
 class NetworkFailingBot:
     async def set_my_commands(self, commands: object) -> None:
         raise TelegramNetworkError(method=object(), message="temporary timeout")
+
+
+class RecordingBot:
+    def __init__(self) -> None:
+        self.commands: object = None
+
+    async def set_my_commands(self, commands: object) -> None:
+        self.commands = commands
+
+
+class ProfileRecordingBot:
+    def __init__(self) -> None:
+        self.description: str | None = None
+        self.short_description: str | None = None
+
+    async def set_my_description(self, description: str) -> None:
+        self.description = description
+
+    async def set_my_short_description(self, short_description: str) -> None:
+        self.short_description = short_description
 
 
 class RecoveringDispatcher:
@@ -29,6 +53,28 @@ async def test_command_registration_network_failure_does_not_abort_startup(
         await set_commands_best_effort(NetworkFailingBot())
 
     assert "command menu registration postponed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_command_menu_includes_start_as_main_menu() -> None:
+    bot = RecordingBot()
+
+    await set_commands_best_effort(bot)
+
+    assert bot.commands is not None
+    assert (bot.commands[0].command, bot.commands[0].description) == ("start", "Главное меню")
+
+
+@pytest.mark.asyncio
+async def test_bot_profile_has_russian_pre_start_greeting() -> None:
+    bot = ProfileRecordingBot()
+
+    await set_profile_best_effort(bot)
+
+    assert bot.short_description == "Мониторинг лучших P2P-цен Walt в рублях."
+    assert bot.description is not None
+    assert "USDT, TON и BTC" in bot.description
+    assert "Coinbase" in bot.description
 
 
 @pytest.mark.asyncio

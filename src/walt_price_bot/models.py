@@ -48,8 +48,9 @@ class P2PAd:
 @dataclass(frozen=True, slots=True)
 class MarketSnapshot:
     asset: Asset
-    buy: P2PAd
-    sell: P2PAd
+    buy: P2PAd | None
+    sell: P2PAd | None
+    exchange_price: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

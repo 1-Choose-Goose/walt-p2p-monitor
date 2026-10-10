@@ -43,6 +43,24 @@ class FakeWaltClient:
         return [ad(asset, side, price)]
 
 
+class FakeExchangeClient:
+    def __init__(self) -> None:
+        self.calls: list[Asset] = []
+
+    async def fetch_rub_rate(self, asset: Asset) -> Decimal:
+        self.calls.append(asset)
+        return {
+            Asset.USDT: Decimal("85.05"),
+            Asset.TON: Decimal("124.08"),
+            Asset.BTC: Decimal("7047246.71"),
+        }[asset]
+
+
+class EmptyWaltClient:
+    async def fetch_ads(self, asset: Asset, side: QuoteSide) -> list[P2PAd]:
+        return []
+
+
 class FakeProvider:
     def __init__(self) -> None:
         self.calls = 0
@@ -78,8 +96,9 @@ class FakeSender:
 @pytest.mark.asyncio
 async def test_market_service_fetches_each_market_once() -> None:
     client = FakeWaltClient()
+    exchange_client = FakeExchangeClient()
 
-    snapshots = await MarketService(client).get_snapshots()
+    snapshots = await MarketService(client, exchange_client).get_snapshots()
 
     assert len(snapshots) == 3
     assert set(client.calls) == {
@@ -90,6 +109,21 @@ async def test_market_service_fetches_each_market_once() -> None:
         (Asset.BTC, QuoteSide.BUY),
         (Asset.BTC, QuoteSide.SELL),
     }
+    assert exchange_client.calls == list(Asset)
+    assert {snapshot.asset: snapshot.exchange_price for snapshot in snapshots} == {
+        Asset.USDT: Decimal("85.05"),
+        Asset.TON: Decimal("124.08"),
+        Asset.BTC: Decimal("7047246.71"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_market_service_keeps_exchange_rates_when_p2p_offers_are_unavailable() -> None:
+    snapshots = await MarketService(EmptyWaltClient(), FakeExchangeClient()).get_snapshots()
+
+    assert len(snapshots) == 3
+    assert all(snapshot.buy is None and snapshot.sell is None for snapshot in snapshots)
+    assert all(snapshot.exchange_price is not None for snapshot in snapshots)
 
 
 async def prepared_repository(path: Path) -> Repository:

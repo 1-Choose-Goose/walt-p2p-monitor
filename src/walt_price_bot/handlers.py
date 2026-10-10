@@ -19,6 +19,7 @@ from .models import (
 from .repository import Repository
 from .ui import (
     asset_keyboard,
+    back_keyboard,
     delete_keyboard,
     direction_keyboard,
     format_market_summary,
@@ -35,11 +36,13 @@ WELCOME = (
     "Слежу за лучшими ценами USDT/RUB, TON/RUB и BTC/RUB.\n"
     "Для покупки учитываю объявления с минимальным лимитом от 500 до 2 000 ₽.\n"
     "Оплата: СБП, Сбербанк или другой российский банк.\n"
-    "Используйте /price, /alert, /change или /schedule."
+    "Используйте /price, /alert, /change или /schedule.\n"
+    "/start — вернуться в главное меню."
 )
 
 HELP = (
     "<b>Команды</b>\n"
+    "/start — главное меню\n"
     "/price — текущие цены\n"
     "/alert — ценовой порог\n"
     "/change — изменение в процентах\n"
@@ -96,7 +99,8 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
     @router.message(Command("start"))
-    async def start(message: Message) -> None:
+    async def start(message: Message, state: FSMContext) -> None:
+        await state.clear()
         await handle_start(message, repository)
 
     @router.message(Command("help"))
@@ -187,7 +191,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(direction=callback.data.rsplit(":", 1)[1])
         await state.set_state(AlertFlow.target)
-        await _callback_message(callback, "Введите цену в рублях, например 90,50:")
+        await _callback_message(
+            callback, "Введите цену в рублях, например 90,50:", back_keyboard()
+        )
 
     @router.message(AlertFlow.target)
     async def alert_target(message: Message, state: FSMContext) -> None:
@@ -197,7 +203,10 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             target = parse_positive_decimal(message.text or "", maximum=Decimal("1000000000"))
         except ValueError:
             await replace_message(
-                message, repository, "Введите корректную положительную цену в рублях."
+                message,
+                repository,
+                "Введите корректную положительную цену в рублях.",
+                reply_markup=back_keyboard(),
             )
             return
         data = await state.get_data()
@@ -238,7 +247,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             return
         await state.update_data(side=callback.data.rsplit(":", 1)[1])
         await state.set_state(ChangeFlow.percent)
-        await _callback_message(callback, "Введите процент изменения от 0,1 до 100:")
+        await _callback_message(
+            callback, "Введите процент изменения от 0,1 до 100:", back_keyboard()
+        )
 
     @router.message(ChangeFlow.percent)
     async def change_percent(message: Message, state: FSMContext) -> None:
@@ -252,13 +263,24 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             snapshot = next(
                 item for item in await market_provider.get_snapshots() if item.asset is asset
             )
-            baseline = snapshot.buy.price if side is QuoteSide.BUY else snapshot.sell.price
+            offer = snapshot.buy if side is QuoteSide.BUY else snapshot.sell
+            if offer is None:
+                raise ValueError
+            baseline = offer.price
         except (ValueError, StopIteration):
-            await replace_message(message, repository, "Введите число от 0,1 до 100.")
+            await replace_message(
+                message,
+                repository,
+                "Введите число от 0,1 до 100.",
+                reply_markup=back_keyboard(),
+            )
             return
         except Exception:
             await replace_message(
-                message, repository, "⚠️ Walt временно недоступен. Повторите позже."
+                message,
+                repository,
+                "⚠️ Walt временно недоступен. Повторите позже.",
+                reply_markup=back_keyboard(),
             )
             return
         alert_id = await repository.add_alert(
@@ -296,7 +318,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             if kind == "interval"
             else "Введите время ЧЧ:ММ (Екатеринбург):"
         )
-        await _callback_message(callback, prompt)
+        await _callback_message(callback, prompt, back_keyboard())
 
     @router.message(ScheduleFlow.value)
     async def schedule_value(message: Message, state: FSMContext) -> None:
@@ -318,7 +340,10 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 )
         except ValueError:
             await replace_message(
-                message, repository, "Некорректное значение. Проверьте формат и диапазон."
+                message,
+                repository,
+                "Некорректное значение. Проверьте формат и диапазон.",
+                reply_markup=back_keyboard(),
             )
             return
         await state.clear()
@@ -370,6 +395,12 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         except Exception:
             text = "⚠️ Не удалось получить цены Walt. Повторите немного позже."
         await _callback_message(callback, text, main_menu_keyboard())
+
+    @router.callback_query(F.data == "menu:home")
+    async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
+        if await owner_required(callback, repository):
+            await state.clear()
+            await _callback_message(callback, WELCOME, main_menu_keyboard())
 
     @router.callback_query(F.data == "menu:alert")
     async def menu_alert(callback: CallbackQuery, state: FSMContext) -> None:

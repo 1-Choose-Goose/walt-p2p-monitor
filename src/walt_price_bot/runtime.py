@@ -24,27 +24,48 @@ class SnapshotProvider(Protocol):
     async def get_snapshots(self) -> list[MarketSnapshot]: ...
 
 
+class ExchangeRateProvider(Protocol):
+    async def fetch_rub_rate(self, asset: Asset) -> Decimal: ...
+
+
 class MarketService:
-    def __init__(self, client: WaltClient) -> None:
+    def __init__(self, client: WaltClient, exchange_client: ExchangeRateProvider) -> None:
         self._client = client
+        self._exchange_client = exchange_client
 
     async def get_snapshots(self) -> list[MarketSnapshot]:
-        async def fetch(asset: Asset) -> MarketSnapshot | None:
-            buy_ads, sell_ads = await asyncio.gather(
+        async def fetch(asset: Asset) -> MarketSnapshot:
+            buy_ads, sell_ads, exchange_price = await asyncio.gather(
                 self._client.fetch_ads(asset, QuoteSide.BUY),
                 self._client.fetch_ads(asset, QuoteSide.SELL),
+                self._fetch_exchange_rate(asset),
             )
             try:
-                return MarketSnapshot(
-                    asset=asset,
-                    buy=select_best_buy_offer(sell_ads),
-                    sell=select_best_sell_offer(buy_ads),
-                )
+                buy = select_best_buy_offer(sell_ads)
             except MarketUnavailable:
-                return None
+                buy = None
+            try:
+                sell = select_best_sell_offer(buy_ads)
+            except MarketUnavailable:
+                sell = None
+            return MarketSnapshot(
+                asset=asset,
+                buy=buy,
+                sell=sell,
+                exchange_price=exchange_price,
+            )
 
         snapshots = await asyncio.gather(*(fetch(asset) for asset in Asset))
-        return [snapshot for snapshot in snapshots if snapshot is not None]
+        return list(snapshots)
+
+    async def _fetch_exchange_rate(self, asset: Asset) -> Decimal | None:
+        try:
+            return await self._exchange_client.fetch_rub_rate(asset)
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch %s exchange rate (%s)", asset.value, type(exc).__name__
+            )
+            return None
 
 
 async def run_monitor_cycle(
@@ -66,7 +87,9 @@ async def run_monitor_cycle(
         if snapshot is None:
             continue
         offer = snapshot.buy if rule.quote_side is QuoteSide.BUY else snapshot.sell
-        price = snapshot.buy.price if rule.quote_side is QuoteSide.BUY else snapshot.sell.price
+        if offer is None:
+            continue
+        price = offer.price
         try:
             if rule.kind is AlertKind.THRESHOLD:
                 evaluation = evaluate_threshold(rule, price)

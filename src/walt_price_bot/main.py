@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import BotCommand
 
 from .config import Settings
+from .exchange import CoinbaseRatesClient
 from .handlers import build_router
 from .messaging import ReplacingSender
 from .repository import Repository
@@ -19,11 +20,18 @@ from .walt import WaltClient
 
 logger = logging.getLogger(__name__)
 
+BOT_SHORT_DESCRIPTION = "Мониторинг лучших P2P-цен Walt в рублях."
+BOT_DESCRIPTION = (
+    "Бот мониторит лучшие P2P-предложения Walt для USDT, TON и BTC в рублях, "
+    "показывает биржевой курс Coinbase и отправляет уведомления по заданным условиям."
+)
+
 
 async def set_commands_best_effort(bot: Bot) -> None:
     try:
         await bot.set_my_commands(
             [
+                BotCommand(command="start", description="Главное меню"),
                 BotCommand(command="price", description="Текущие цены"),
                 BotCommand(command="alert", description="Ценовой порог"),
                 BotCommand(command="change", description="Изменение в процентах"),
@@ -37,6 +45,14 @@ async def set_commands_best_effort(bot: Bot) -> None:
         )
     except TelegramNetworkError:
         logger.warning("Telegram command menu registration postponed after network error")
+
+
+async def set_profile_best_effort(bot: Bot) -> None:
+    try:
+        await bot.set_my_short_description(short_description=BOT_SHORT_DESCRIPTION)
+        await bot.set_my_description(description=BOT_DESCRIPTION)
+    except TelegramNetworkError:
+        logger.warning("Telegram bot profile update postponed after network error")
 
 
 async def start_polling_resilient(
@@ -78,9 +94,10 @@ async def run() -> None:
                 session=session,
                 api_key=settings.walt_api_key.get_secret_value(),
             )
-            market = MarketService(client)
+            market = MarketService(client, CoinbaseRatesClient(session=session))
             dispatcher.include_router(build_router(repository, market))
             await set_commands_best_effort(bot)
+            await set_profile_best_effort(bot)
             monitor_task = asyncio.create_task(
                 monitor_forever(
                     repository,
