@@ -23,6 +23,18 @@ _DENIAL_TEXT = {
 }
 
 
+def _is_onboarding_message(event: Any, status: AccessStatus | None) -> bool:
+    if getattr(event, "contact", None) is not None:
+        return True
+    text = getattr(event, "text", None)
+    if not isinstance(text, str):
+        return False
+    command = text.strip().split(maxsplit=1)[0].partition("@")[0].lower()
+    if command in {"/start", "/token"}:
+        return True
+    return status is AccessStatus.AWAITING_TOKEN
+
+
 class AccessMiddleware(BaseMiddleware):
     def __init__(self, repository: Repository, admin_id: int) -> None:
         if admin_id != ADMIN_TELEGRAM_ID:
@@ -40,6 +52,9 @@ class AccessMiddleware(BaseMiddleware):
         telegram_id = getattr(sender, "id", None)
         user = await self.repository.get_user(telegram_id) if telegram_id else None
         data["event_user"] = user
+
+        if _is_onboarding_message(event, user.status if user else None):
+            return await handler(event, data)
 
         observer = data.get("handler")
         flags = getattr(observer, "flags", {})

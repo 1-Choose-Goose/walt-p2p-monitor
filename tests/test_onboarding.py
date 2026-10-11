@@ -156,6 +156,7 @@ def test_admin_user_text_escapes_telegram_html() -> None:
 async def test_new_request_notification_escapes_telegram_profile(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 44)
     router = build_onboarding_router(
         repository,
         CredentialCipher(SecretStr(Fernet.generate_key().decode())),
@@ -192,6 +193,48 @@ async def test_new_request_notification_escapes_telegram_profile(tmp_path: Path)
     assert "Иван &lt;Admin&gt; &amp; Co" in admin_text
     assert "@bad&amp;name" in admin_text
     assert "Иван <Admin>" not in admin_text
+    bot.delete_message.assert_not_awaited()
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 44
+
+
+@pytest.mark.asyncio
+async def test_approval_deletes_separate_admin_request_message(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    await register_contact(
+        repository,
+        contact(),
+        SimpleNamespace(id=101, first_name="Иван", username=None),
+    )
+    router = build_onboarding_router(
+        repository,
+        CredentialCipher(SecretStr(Fernet.generate_key().decode())),
+        SimpleNamespace(),
+        ADMIN_TELEGRAM_ID,
+        SEED_ASSETS[1],
+    )
+    approve = next(
+        handler.callback
+        for handler in router.callback_query.handlers
+        if handler.callback.__name__ == "approve"
+    )
+    request_message = SimpleNamespace(delete=AsyncMock())
+    callback = SimpleNamespace(
+        data="access:approve:101",
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        message=request_message,
+        bot=SimpleNamespace(
+            delete_message=AsyncMock(),
+            send_message=AsyncMock(return_value=SimpleNamespace(message_id=99)),
+        ),
+        answer=AsyncMock(),
+    )
+
+    await approve(callback)
+
+    assert (await repository.get_user(101)).status is AccessStatus.AWAITING_TOKEN
+    request_message.delete.assert_awaited_once()
+    callback.answer.assert_awaited_once_with("Доступ одобрен")
 
 
 @pytest.mark.asyncio

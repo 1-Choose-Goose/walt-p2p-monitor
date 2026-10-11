@@ -10,8 +10,10 @@ from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 
 
 class FakeMessage:
-    def __init__(self, telegram_id: int) -> None:
+    def __init__(self, telegram_id: int, *, text: str | None = None) -> None:
         self.from_user = SimpleNamespace(id=telegram_id)
+        self.text = text
+        self.contact = None
         self.answers: list[str] = []
 
     async def answer(self, text: str) -> None:
@@ -44,6 +46,27 @@ async def test_public_handler_allows_unknown_user_and_attaches_none(tmp_path: Pa
 
     assert result == "ok"
     assert data["event_user"] is None
+
+
+@pytest.mark.asyncio
+async def test_start_is_public_when_dispatcher_does_not_expose_handler_flags(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    middleware = AccessMiddleware(repository, ADMIN_TELEGRAM_ID)
+    handler = AsyncMock(return_value="registration")
+    event = FakeMessage(101, text="/start")
+
+    result = await middleware(
+        handler,
+        event,
+        {"handler": SimpleNamespace(flags={})},
+    )
+
+    assert result == "registration"
+    handler.assert_awaited_once()
+    assert event.answers == []
 
 
 @pytest.mark.asyncio

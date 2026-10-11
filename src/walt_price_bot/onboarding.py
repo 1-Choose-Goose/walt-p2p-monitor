@@ -1,3 +1,4 @@
+import contextlib
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -5,6 +6,7 @@ from html import escape
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -274,9 +276,10 @@ def build_onboarding_router(
                 if message.from_user.username
                 else "без username"
             )
-            await ReplacingSender(
-                message.bot,
-                repository,
+            await message.bot.send_message(
+                admin_id,
+                f"Новая заявка: {escape(message.from_user.full_name)} "
+                f"({username}), ID {message.from_user.id}.",
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
@@ -287,10 +290,6 @@ def build_onboarding_router(
                         ]
                     ]
                 ),
-            ).send_message(
-                admin_id,
-                f"Новая заявка: {escape(message.from_user.full_name)} "
-                f"({username}), ID {message.from_user.id}.",
             )
 
     @router.callback_query(
@@ -306,6 +305,9 @@ def build_onboarding_router(
         await ReplacingSender(callback.bot, repository).send_message(
             target_id, "✅ Доступ одобрен. Теперь отправьте токен Walt командой /token."
         )
+        if callback.message:
+            with contextlib.suppress(TelegramAPIError):
+                await callback.message.delete()
         await callback.answer("Доступ одобрен")
 
     @router.message(Command("token"), flags={"access": AccessRequirement.PUBLIC})
