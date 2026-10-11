@@ -836,7 +836,6 @@ def build_preferences_router(repository: Repository) -> Router:
             await replace_message(message, repository, str(exc))
             return
         await state.clear()
-        await message.delete()
         account = await repository.get_user(message.from_user.id)
         if account is None:
             raise ValueError("unknown user")

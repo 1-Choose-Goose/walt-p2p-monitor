@@ -98,6 +98,38 @@ async def test_lower_limit_cannot_exceed_saved_upper_limit(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_custom_limit_saves_and_confirms_without_deleting_input_twice(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    router = build_preferences_router(repository)
+    handler = next(
+        entry.callback
+        for entry in router.message.handlers
+        if entry.callback.__name__ == "custom_limit"
+    )
+    message = SimpleNamespace(
+        text="1 500",
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        bot=SimpleNamespace(delete_message=AsyncMock()),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=51)),
+        delete=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+
+    await handler(message, state)
+
+    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    assert preferences.min_limit_from == Decimal("1500")
+    state.clear.assert_awaited_once()
+    message.answer.assert_awaited_once()
+    assert message.answer.await_args.args[0] == "✅ Лимит сохранён."
+    message.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_asset_toggle_is_one_click_and_cannot_remove_last(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
