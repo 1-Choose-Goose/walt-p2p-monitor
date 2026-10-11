@@ -72,12 +72,12 @@ def _supports_payments(ad: P2PAd, configured: tuple[str, ...]) -> bool:
 
 
 def _matches_limits(ad: P2PAd, filters: MarketFilters) -> bool:
+    if filters.desired_amount is not None:
+        return ad.min_amount <= filters.desired_amount <= ad.max_amount
     if ad.min_amount < filters.min_limit_from:
         return False
-    if filters.min_limit_to is not None and ad.min_amount > filters.min_limit_to:
-        return False
-    return filters.desired_amount is None or (
-        ad.min_amount <= filters.desired_amount <= ad.max_amount
+    return not (
+        filters.min_limit_to is not None and ad.min_amount > filters.min_limit_to
     )
 
 

@@ -7,12 +7,11 @@ import pytest
 
 from walt_price_bot.models import BTC, ETH, QuoteSide
 from walt_price_bot.preferences import (
-    PreferencesFlow,
     SettingsAction,
     SettingsCallback,
+    amount_settings_keyboard,
     build_preferences_router,
     format_preferences,
-    limit_settings_keyboard,
     notification_categories_keyboard,
     parse_money,
     payment_methods_keyboard,
@@ -79,7 +78,8 @@ async def test_preferences_remember_assets_limits_intervals_and_toggles(tmp_path
     assert preferences.quiet_hours.start == "23:00"
     rendered = format_preferences(preferences)
     assert "BTC, ETH" in rendered
-    assert "1 000 ₽ — без ограничения" in rendered
+    assert "Лимит объявления" not in rendered
+    assert "Сумма сделки: 25 000 ₽" in rendered
     assert "каждую 1 мин." in rendered
 
 
@@ -99,108 +99,30 @@ async def test_lower_limit_cannot_exceed_saved_upper_limit(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_custom_limit_asks_for_upper_bound_before_saving(
-    tmp_path: Path,
-) -> None:
+async def test_custom_transaction_amount_is_saved_and_confirmed(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
     router = build_preferences_router(repository)
     handler = next(
         entry.callback
         for entry in router.message.handlers
-        if entry.callback.__name__ == "custom_limit"
+        if entry.callback.__name__ == "desired_amount"
     )
     message = SimpleNamespace(
-        text="5 000",
+        text="3 000",
         from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         bot=SimpleNamespace(delete_message=AsyncMock()),
         answer=AsyncMock(return_value=SimpleNamespace(message_id=51)),
-        delete=AsyncMock(),
     )
-    state = SimpleNamespace(
-        clear=AsyncMock(),
-        set_state=AsyncMock(),
-        update_data=AsyncMock(),
-    )
+    state = SimpleNamespace(clear=AsyncMock())
 
     await handler(message, state)
 
     preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
-    assert preferences.min_limit_from == Decimal("500")
-    assert preferences.min_limit_to == Decimal("2000")
-    state.update_data.assert_awaited_once_with(custom_limit_from="5000")
-    state.set_state.assert_awaited_once_with(PreferencesFlow.custom_limit_upper)
-    state.clear.assert_not_awaited()
-    message.answer.assert_awaited_once()
-    assert "верхнюю границу" in message.answer.await_args.args[0]
-    markup = message.answer.await_args.kwargs["reply_markup"]
-    unlimited = SettingsCallback.unpack(markup.inline_keyboard[0][0].callback_data)
-    assert unlimited.action is SettingsAction.LIMIT_NO_MAX
-    message.delete.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_custom_upper_limit_saves_both_new_bounds(tmp_path: Path) -> None:
-    repository = Repository(tmp_path / "bot.db")
-    await repository.initialize()
-    router = build_preferences_router(repository)
-    handler = next(
-        entry.callback
-        for entry in router.message.handlers
-        if entry.callback.__name__ == "custom_limit_upper"
-    )
-    message = SimpleNamespace(
-        text="10 000",
-        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
-        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
-        bot=SimpleNamespace(delete_message=AsyncMock()),
-        answer=AsyncMock(return_value=SimpleNamespace(message_id=52)),
-    )
-    state = SimpleNamespace(
-        clear=AsyncMock(),
-        get_data=AsyncMock(return_value={"custom_limit_from": "5000"}),
-    )
-
-    await handler(message, state)
-
-    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
-    assert preferences.min_limit_from == Decimal("5000")
-    assert preferences.min_limit_to == Decimal("10000")
+    assert preferences.desired_amount == Decimal("3000")
     state.clear.assert_awaited_once()
-    assert message.answer.await_args.args[0] == "✅ Лимит 5 000–10 000 ₽ сохранён."
-
-
-@pytest.mark.asyncio
-async def test_custom_limit_can_have_no_upper_bound(tmp_path: Path) -> None:
-    repository = Repository(tmp_path / "bot.db")
-    await repository.initialize()
-    router = build_preferences_router(repository)
-    handler = next(
-        entry.callback
-        for entry in router.callback_query.handlers
-        if entry.callback.__name__ == "setting_action"
-    )
-    callback = SimpleNamespace(
-        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
-        message=SimpleNamespace(edit_text=AsyncMock()),
-        answer=AsyncMock(),
-    )
-    state = SimpleNamespace(
-        clear=AsyncMock(),
-        get_data=AsyncMock(return_value={"custom_limit_from": "5000"}),
-    )
-
-    await handler(
-        callback,
-        SettingsCallback(action=SettingsAction.LIMIT_NO_MAX),
-        state,
-    )
-
-    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
-    assert preferences.min_limit_from == Decimal("5000")
-    assert preferences.min_limit_to is None
-    state.clear.assert_awaited_once()
+    assert message.answer.await_args.args[0] == "✅ Сумма сделки 3 000 ₽ сохранена."
 
 
 @pytest.mark.asyncio
@@ -221,13 +143,22 @@ def test_typed_settings_callback_round_trip() -> None:
     assert unpacked.value == "2000"
 
 
-def test_limit_menu_uses_valid_callback_values() -> None:
-    keyboard = limit_settings_keyboard()
+def test_amount_menu_uses_clear_callback_values() -> None:
+    keyboard = amount_settings_keyboard()
     callbacks = [
         button.callback_data for row in keyboard.inline_keyboard for button in row
     ]
 
-    assert "settings:limit:500-2000" in callbacks
+    assert "settings:amount:1000" in callbacks
+    assert "settings:amount:custom" in callbacks
+
+
+def test_settings_use_one_clear_amount_button() -> None:
+    buttons = [button for row in settings_keyboard().inline_keyboard for button in row]
+
+    amount = next(button for button in buttons if "Сумма сделки" in button.text)
+    assert SettingsCallback.unpack(amount.callback_data).action is SettingsAction.AMOUNT
+    assert all("Лимиты" not in button.text for button in buttons)
 
 
 def test_settings_do_not_duplicate_notifications_section() -> None:

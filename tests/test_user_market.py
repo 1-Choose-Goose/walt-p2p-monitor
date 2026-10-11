@@ -90,3 +90,28 @@ async def test_unavailable_exchange_keeps_walt_offer() -> None:
     assert snapshot.buy is not None
     assert snapshot.sell is not None
     assert snapshot.exchange_price is None
+
+
+@pytest.mark.asyncio
+async def test_transaction_amount_ignores_legacy_minimum_limit_range() -> None:
+    entry = AssetCatalogEntry(BTC, "BTC", "BTC")
+    client = AsyncMock()
+    client.fetch_ads.side_effect = lambda _, side: [
+        ad(BTC, side, "100", minimum="100"),
+        ad(BTC, side, "101", minimum="80000"),
+    ]
+    exchange = AsyncMock()
+    exchange.fetch_rub_rate.return_value = Decimal("100")
+    filters = MarketFilters(
+        directions=(QuoteSide.BUY,),
+        min_limit_from=Decimal("3000"),
+        min_limit_to=None,
+        desired_amount=Decimal("3000"),
+        buy_payments=("sbp",),
+    )
+
+    snapshot = (await MarketService(client, exchange).get_snapshots([entry], filters))[0]
+
+    assert snapshot.buy is not None
+    assert snapshot.buy.min_amount == Decimal("100")
+    assert snapshot.buy.max_amount >= Decimal("3000")
