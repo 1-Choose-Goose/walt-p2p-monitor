@@ -1,4 +1,8 @@
+import os
+import sqlite3
 from collections.abc import Iterable
+from contextlib import closing
+from pathlib import Path
 
 import aiosqlite
 
@@ -13,6 +17,28 @@ LEGACY_TABLES = (
     "opportunity_notifications",
     "opportunity_notification_history",
 )
+
+
+def backup_sqlite_database(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    destination = destination.resolve()
+    if source == destination:
+        raise ValueError("SQLite backup destination must differ from source")
+    temporary = destination.with_name(destination.name + ".tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        source_uri = source.as_uri() + "?mode=ro"
+        with (
+            closing(sqlite3.connect(source_uri, uri=True)) as source_db,
+            closing(sqlite3.connect(temporary)) as destination_db,
+        ):
+            source_db.backup(destination_db)
+            result = destination_db.execute("PRAGMA integrity_check").fetchone()
+            if result != ("ok",):
+                raise RuntimeError("SQLite backup integrity check failed")
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 CREATE_STATEMENTS = (
     """
@@ -385,6 +411,10 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
                 await db.execute(
                     "ALTER TABLE opportunity_notification_history ADD COLUMN "
                     "expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'"
+                )
+                await db.execute(
+                    "UPDATE opportunity_notification_history SET expires_at = "
+                    "strftime('%Y-%m-%dT%H:%M:%f+00:00', notified_at, '+10 minutes')"
                 )
                 version = 5
             if version != int(row[0]):

@@ -48,6 +48,11 @@ class FakeResponse:
         return self._payload
 
 
+class BrokenJsonResponse(FakeResponse):
+    async def json(self) -> object:
+        raise ValueError("invalid json")
+
+
 class FakeSession:
     def __init__(self, responses: list[FakeResponse]) -> None:
         self.responses = responses
@@ -100,6 +105,36 @@ async def test_fetch_ads_retries_temporary_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_ads_retries_rate_limit_without_unbounded_loop() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(429, {"status": "ERROR"}),
+            FakeResponse(200, {"status": "SUCCESS", "data": [VALID_AD]}),
+        ]
+    )
+
+    ads = await WaltClient(
+        session=session, api_key="secret-key", sleep=no_sleep
+    ).fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+    assert len(ads) == 1
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_is_source_error_not_empty_market() -> None:
+    session = FakeSession([BrokenJsonResponse(200, None)])
+
+    with pytest.raises(WaltAPIError, match="temporarily unavailable"):
+        await WaltClient(
+            session=session,
+            api_key="secret-key",
+            sleep=no_sleep,
+            max_attempts=1,
+        ).fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+
+@pytest.mark.asyncio
 async def test_fetch_ads_rejects_malformed_or_wrong_currency_data() -> None:
     malformed = dict(VALID_AD, cryptoCurrency="TON")
     session = FakeSession([FakeResponse(200, {"status": "SUCCESS", "data": [malformed]})])
@@ -107,6 +142,33 @@ async def test_fetch_ads_rejects_malformed_or_wrong_currency_data() -> None:
 
     with pytest.raises(WaltAPIError, match="unexpected asset"):
         await client.fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+
+@pytest.mark.asyncio
+async def test_one_malformed_ad_does_not_hide_valid_page_offers() -> None:
+    malformed = dict(VALID_AD, price="NaN")
+    valid = dict(VALID_AD, id="valid")
+    session = FakeSession(
+        [FakeResponse(200, {"status": "SUCCESS", "data": [malformed, valid]})]
+    )
+
+    ads = await WaltClient(
+        session=session, api_key="secret-key", sleep=no_sleep
+    ).fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+    assert [ad.id for ad in ads] == ["valid"]
+
+
+@pytest.mark.asyncio
+async def test_non_list_walt_data_is_not_treated_as_empty_market() -> None:
+    session = FakeSession(
+        [FakeResponse(200, {"status": "SUCCESS", "data": {"id": "bad"}})]
+    )
+
+    with pytest.raises(WaltAPIError, match="invalid Walt response data"):
+        await WaltClient(
+            session=session, api_key="secret-key", sleep=no_sleep
+        ).fetch_ads(Asset.USDT, QuoteSide.SELL)
 
 
 @pytest.mark.asyncio
@@ -160,6 +222,26 @@ async def test_fetch_ads_uses_bounded_pagination() -> None:
     ).fetch_ads(Asset.USDT, QuoteSide.SELL)
 
     assert len(ads) == 51
+    assert [call["json"]["page"] for call in session.calls] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_invalid_ad_on_full_page_does_not_stop_pagination() -> None:
+    first_page = [dict(VALID_AD, id=str(index)) for index in range(49)]
+    first_page.append(dict(VALID_AD, id="bad", price="NaN"))
+    second_page = [dict(VALID_AD, id="last")]
+    session = FakeSession(
+        [
+            FakeResponse(200, {"status": "SUCCESS", "data": first_page}),
+            FakeResponse(200, {"status": "SUCCESS", "data": second_page}),
+        ]
+    )
+
+    ads = await WaltClient(
+        session=session, api_key="secret-key", sleep=no_sleep
+    ).fetch_ads(Asset.USDT, QuoteSide.SELL)
+
+    assert len(ads) == 50
     assert [call["json"]["page"] for call in session.calls] == [1, 2]
 
 

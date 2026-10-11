@@ -3,7 +3,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from walt_price_bot.admin import AdminAction, AdminCallback, apply_admin_action, format_user_list
+from walt_price_bot.admin import (
+    AdminAction,
+    AdminCallback,
+    AdminPageCallback,
+    _list_keyboard,
+    _user_keyboard,
+    apply_admin_action,
+    format_user_list,
+    load_admin_page,
+)
 from walt_price_bot.models import AccessStatus, UserRole
 from walt_price_bot.repository import (
     ADMIN_TELEGRAM_ID,
@@ -148,3 +157,64 @@ async def test_non_admin_and_fixed_admin_are_immutable(tmp_path: Path) -> None:
             AccessStatus.ACTIVE,
             0,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_count", [1, 19, 20, 21, 40, 100])
+async def test_admin_pages_cover_every_non_admin_user_once(
+    tmp_path: Path, user_count: int
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    for index in range(user_count):
+        await requested_user(repository, 1000 + index)
+
+    seen: list[int] = []
+    page = 0
+    while True:
+        users, page, has_previous, has_next = await load_admin_page(
+            repository, page, ADMIN_TELEGRAM_ID
+        )
+        seen.extend(user.telegram_id for user in users)
+        assert has_previous is (page > 0)
+        if not has_next:
+            break
+        page += 1
+
+    assert len(seen) == user_count
+    assert len(set(seen)) == user_count
+    assert ADMIN_TELEGRAM_ID not in seen
+
+
+@pytest.mark.asyncio
+async def test_admin_card_keeps_second_page_navigation(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    for index in range(21):
+        await requested_user(repository, 2000 + index)
+    users, page, has_previous, has_next = await load_admin_page(
+        repository, 1, ADMIN_TELEGRAM_ID
+    )
+
+    list_keyboard = _list_keyboard(users, page, has_previous, has_next)
+    open_callback = AdminCallback.unpack(list_keyboard.inline_keyboard[0][0].callback_data)
+    card_keyboard = _user_keyboard(users[0], open_callback.page)
+    back_callback = AdminPageCallback.unpack(
+        card_keyboard.inline_keyboard[-1][0].callback_data
+    )
+
+    assert open_callback.page == 1
+    assert back_callback.page == 1
+
+    updated = await apply_admin_action(
+        repository,
+        ADMIN_TELEGRAM_ID,
+        AdminAction.APPROVE,
+        open_callback.target_id,
+        open_callback.expected_status,
+        open_callback.expected_version,
+    )
+
+    assert updated.status is AccessStatus.AWAITING_TOKEN
+    stored = await repository.get_user(open_callback.target_id)
+    assert stored.status is AccessStatus.AWAITING_TOKEN

@@ -314,6 +314,7 @@ async def run_monitor_cycle(
                     snapshots,
                     tuple(entry.symbol for entry in assets),
                     preferences.directions,
+                    show_exchange_rate=preferences.show_exchange_rate,
                 ),
             )
             await repository.mark_schedule_sent(
@@ -336,6 +337,7 @@ async def run_monitor_cycle(
                         snapshots,
                         tuple(entry.symbol for entry in assets),
                         preferences.directions,
+                        show_exchange_rate=preferences.show_exchange_rate,
                     ),
                 )
                 await repository.mark_summary_sent(

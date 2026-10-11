@@ -32,10 +32,11 @@ def test_installer_force_reinstalls_updated_application_package() -> None:
     text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
 
     assert "--force-reinstall --no-deps" in text
-    assert 'rm -rf "${app_dir}/build" "${app_dir}/src"' in text
+    assert 'cp -a "${source_dir}/src" "${preflight_dir}/src"' in text
     assert 'cp -a "${source_dir}/src" "${app_dir}/src"' in text
     assert "-name '*.egg-info' -exec rm -rf" in text
-    assert 'cp -a -- "${database_file}" "${backup_file}"' in text
+    assert "backup_sqlite_database" in text
+    assert 'cp -a -- "${database_file}" "${backup_file}"' not in text
     assert "systemctl stop walt-price-bot.service" in text
 
 
@@ -56,3 +57,18 @@ def test_release_assets_are_lf_and_service_is_restarted() -> None:
     assert b"\r\n" not in installer
     assert b"\r\n" not in service
     assert b"systemctl enable --now walt-price-bot.service" in installer
+
+
+def test_installer_preflights_before_stopping_and_rolls_back_failure() -> None:
+    text = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+
+    assert text.index("preflight_dir=") < text.index(
+        "systemctl stop walt-price-bot.service"
+    )
+    assert "rollback()" in text
+    assert "trap rollback EXIT" in text
+    assert "previous_release=" in text
+    assert "failed_release=" in text
+    assert "systemctl is-active --quiet walt-price-bot.service" in text
+    assert "systemctl is-enabled --quiet walt-price-bot.service" in text
+    assert "runuser -u waltbot" not in text

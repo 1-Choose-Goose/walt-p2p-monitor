@@ -1,6 +1,7 @@
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from html import escape
 from typing import Any
 
 from aiogram import F, Router
@@ -40,6 +41,19 @@ WELCOME = (
 @dataclass(frozen=True, slots=True)
 class RegistrationResult:
     notify_admin: bool
+    status: AccessStatus
+
+
+def registration_feedback(result: RegistrationResult) -> str:
+    if result.status is AccessStatus.ACTIVE:
+        return "✅ Номер подтверждён и привязан к аккаунту."
+    if result.status is AccessStatus.AWAITING_TOKEN:
+        return "✅ Доступ уже одобрен. Теперь отправьте токен Walt командой /token."
+    if result.status is AccessStatus.REVOKED:
+        return "🚫 Доступ отозван. Восстановить его может только администратор."
+    if result.notify_admin:
+        return "✅ Номер подтверждён. Заявка отправлена администратору."
+    return "Заявка уже отправлена и ожидает решения администратора."
 
 
 class TokenFlow(StatesGroup):
@@ -64,14 +78,15 @@ async def register_contact(
 ) -> RegistrationResult:
     phone = normalize_phone(contact, sender.id)
     previous = await repository.get_user(sender.id)
-    await repository.create_or_refresh_request(
+    account = await repository.create_or_refresh_request(
         sender.id,
         phone=phone,
         first_name=getattr(sender, "first_name", None),
         username=getattr(sender, "username", None),
     )
     return RegistrationResult(
-        notify_admin=previous is None or previous.status is AccessStatus.REJECTED
+        notify_admin=previous is None or previous.status is AccessStatus.REJECTED,
+        status=account.status,
     )
 
 
@@ -242,23 +257,20 @@ def build_onboarding_router(
             )
             return
         account = await repository.get_user(message.from_user.id)
-        if account and account.status is AccessStatus.ACTIVE:
-            await replace_message(
-                message,
-                repository,
-                "✅ Номер подтверждён и привязан к аккаунту.",
-                reply_markup=main_navigation_keyboard(account.role),
-            )
-        else:
-            await replace_message(
-                message,
-                repository,
-                "✅ Номер подтверждён. Заявка отправлена администратору.",
-                reply_markup=remove_reply_keyboard(),
-            )
+        reply_markup = (
+            main_navigation_keyboard(account.role)
+            if account and account.status is AccessStatus.ACTIVE
+            else remove_reply_keyboard()
+        )
+        await replace_message(
+            message,
+            repository,
+            registration_feedback(result),
+            reply_markup=reply_markup,
+        )
         if result.notify_admin:
             username = (
-                f"@{message.from_user.username}"
+                f"@{escape(message.from_user.username)}"
                 if message.from_user.username
                 else "без username"
             )
@@ -277,7 +289,7 @@ def build_onboarding_router(
                 ),
             ).send_message(
                 admin_id,
-                f"Новая заявка: {message.from_user.full_name} "
+                f"Новая заявка: {escape(message.from_user.full_name)} "
                 f"({username}), ID {message.from_user.id}.",
             )
 

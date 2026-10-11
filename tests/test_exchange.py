@@ -52,6 +52,23 @@ async def test_coinbase_client_returns_ruble_exchange_rate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_coinbase_success_is_briefly_reused_between_users() -> None:
+    session = FakeSession(
+        FakeResponse(
+            200,
+            {"data": {"currency": "USDT", "rates": {"RUB": "85.10"}}},
+        )
+    )
+    client = CoinbaseRatesClient(session=session)
+
+    first = await client.fetch_rub_rate(Asset.USDT)
+    second = await client.fetch_rub_rate(Asset.USDT)
+
+    assert first == second == Decimal("85.10")
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_coinbase_client_rejects_invalid_rate() -> None:
     session = FakeSession(
         FakeResponse(200, {"data": {"currency": "BTC", "rates": {"RUB": "0"}}})

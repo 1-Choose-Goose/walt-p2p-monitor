@@ -77,11 +77,13 @@ def format_market_summary(
     snapshots: list[MarketSnapshot],
     expected_assets: list[Asset] | tuple[Asset, ...] | set[Asset] | None = None,
     directions: tuple[QuoteSide, ...] = (QuoteSide.BUY, QuoteSide.SELL),
+    *,
+    show_exchange_rate: bool = True,
 ) -> str:
     blocks = ["📊 <b>Walt P2P — актуальные цены</b>"]
     for snapshot in snapshots:
         lines = [f"\n<b>{snapshot.asset.value} / RUB</b>"]
-        if snapshot.exchange_price is not None:
+        if show_exchange_rate and snapshot.exchange_price is not None:
             lines.append(f"🏦 Биржевой курс (Coinbase): {_money(snapshot.exchange_price)} ₽")
         if QuoteSide.BUY in directions:
             if not snapshot.buy_source_available:

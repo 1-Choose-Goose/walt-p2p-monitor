@@ -1,6 +1,7 @@
 import contextlib
 from collections.abc import Awaitable, Callable, Sequence
 from enum import StrEnum
+from html import escape
 from typing import Any
 
 from aiogram import F, Router
@@ -10,7 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .access import AccessRequirement
 from .keyboards import ADMIN_BUTTON
-from .messaging import DeleteIncomingMessagesMiddleware, replace_message
+from .messaging import DeleteIncomingMessagesMiddleware, ReplacingSender, replace_message
 from .models import AccessStatus, User, UserRole
 from .repository import ADMIN_TELEGRAM_ID, InvalidUserTransitionError, Repository
 
@@ -35,13 +36,21 @@ class AdminCallback(CallbackData, prefix="admin"):
     page: int = 0
 
 
+class AdminPageCallback(CallbackData, prefix="admin_page"):
+    page: int
+
+
+ADMIN_PAGE_SIZE = 20
+
+
 def format_user_list(users: Sequence[User], *, page: int) -> str:
     lines = [f"👥 <b>Пользователи · Страница {page}</b>"]
     for user in users:
-        name = user.first_name or "Без имени"
+        name = escape(user.first_name or "Без имени")
+        phone = escape(user.phone or "без номера")
         lines.append(
             f"\n{name} · <code>{user.telegram_id}</code>\n"
-            f"{user.status.value} · {user.role.value} · {user.phone or 'без номера'}"
+            f"{user.status.value} · {user.role.value} · {phone}"
         )
     if not users:
         lines.append("\nСписок пуст.")
@@ -80,27 +89,68 @@ def _user_keyboard(user: User, page: int) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=AdminPageCallback(page=page).pack(),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _list_keyboard(users: Sequence[User], page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"{user.first_name or 'Без имени'} · {user.telegram_id}",
-                    callback_data=AdminCallback(
-                        action=AdminAction.OPEN,
-                        target_id=user.telegram_id,
-                        expected_status=user.status,
-                        expected_version=user.version,
-                        page=page,
-                    ).pack(),
-                )
-            ]
-            for user in users
+def _list_keyboard(
+    users: Sequence[User],
+    page: int,
+    has_previous: bool = False,
+    has_next: bool = False,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{user.first_name or 'Без имени'} · {user.telegram_id}",
+                callback_data=AdminCallback(
+                    action=AdminAction.OPEN,
+                    target_id=user.telegram_id,
+                    expected_status=user.status,
+                    expected_version=user.version,
+                    page=page,
+                ).pack(),
+            )
         ]
+        for user in users
+    ]
+    navigation: list[InlineKeyboardButton] = []
+    if has_previous:
+        navigation.append(
+            InlineKeyboardButton(
+                text="Назад", callback_data=AdminPageCallback(page=page - 1).pack()
+            )
+        )
+    if has_next:
+        navigation.append(
+            InlineKeyboardButton(
+                text="Вперёд", callback_data=AdminPageCallback(page=page + 1).pack()
+            )
+        )
+    if navigation:
+        rows.append(navigation)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def load_admin_page(
+    repository: Repository, page: int, admin_id: int
+) -> tuple[list[User], int, bool, bool]:
+    total = await repository.count_users(exclude_telegram_id=admin_id)
+    last_page = max(0, (total - 1) // ADMIN_PAGE_SIZE)
+    page = min(max(page, 0), last_page)
+    users = await repository.list_users(
+        limit=ADMIN_PAGE_SIZE,
+        offset=page * ADMIN_PAGE_SIZE,
+        exclude_telegram_id=admin_id,
     )
+    return users, page, page > 0, page < last_page
 
 
 def _delete_confirmation(user: User, page: int) -> InlineKeyboardMarkup:
@@ -203,33 +253,48 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
     router = Router(name="admin")
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
+    async def page_content(
+        page: int,
+    ) -> tuple[str, InlineKeyboardMarkup, int]:
+        users, current_page, has_previous, has_next = await load_admin_page(
+            repository, page, admin_id
+        )
+        return (
+            format_user_list(users, page=current_page + 1),
+            _list_keyboard(users, current_page, has_previous, has_next),
+            current_page,
+        )
+
     @router.message(F.text == ADMIN_BUTTON, flags={"access": AccessRequirement.ADMIN})
     @router.message(Command("admin"), flags={"access": AccessRequirement.ADMIN})
     async def admin_panel(message: Message) -> None:
-        users = [
-            user
-            for user in await repository.list_users(limit=20)
-            if user.telegram_id != admin_id
-        ]
+        text, keyboard, _ = await page_content(0)
         await replace_message(
             message,
             repository,
-            format_user_list(users, page=1),
-            reply_markup=_list_keyboard(users, 0),
+            text,
+            reply_markup=keyboard,
         )
 
     @router.callback_query(F.data == "menu:admin", flags={"access": AccessRequirement.ADMIN})
     async def admin_panel_callback(callback: CallbackQuery) -> None:
-        users = [
-            user
-            for user in await repository.list_users(limit=20)
-            if user.telegram_id != admin_id
-        ]
+        text, keyboard, _ = await page_content(0)
         if callback.message:
             await callback.message.edit_text(
-                format_user_list(users, page=1),
-                reply_markup=_list_keyboard(users, 0),
+                text,
+                reply_markup=keyboard,
             )
+        await callback.answer()
+
+    @router.callback_query(
+        AdminPageCallback.filter(), flags={"access": AccessRequirement.ADMIN}
+    )
+    async def admin_page(
+        callback: CallbackQuery, callback_data: AdminPageCallback
+    ) -> None:
+        text, keyboard, _ = await page_content(callback_data.page)
+        if callback.message:
+            await callback.message.edit_text(text, reply_markup=keyboard)
         await callback.answer()
 
     @router.callback_query(AdminCallback.filter(), flags={"access": AccessRequirement.ADMIN})
@@ -255,6 +320,7 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
             await callback.answer()
             return
         try:
+            notifier = ReplacingSender(callback.bot, repository).send_message
             user = await apply_admin_action(
                 repository,
                 callback.from_user.id,
@@ -262,13 +328,17 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
                 callback_data.target_id,
                 callback_data.expected_status,
                 callback_data.expected_version,
-                notify=callback.bot.send_message,
+                notify=notifier,
             )
         except InvalidUserTransitionError:
             await callback.answer("Данные уже изменились. Обновите список.", show_alert=True)
             return
         await callback.answer("Готово")
         if callback.message:
+            if callback_data.action is AdminAction.CONFIRM_DELETE:
+                text, keyboard, _ = await page_content(callback_data.page)
+                await callback.message.edit_text(text, reply_markup=keyboard)
+                return
             await callback.message.edit_text(
                 format_user_list([user], page=callback_data.page + 1),
                 reply_markup=_user_keyboard(user, callback_data.page),

@@ -147,7 +147,7 @@ async def run() -> None:
                     repository,
                     factory,
                     build_message_sender(bot, repository),
-                    tick_seconds=min(settings.poll_interval_seconds, 15),
+                    tick_seconds=settings.monitor_scheduler_tick_seconds,
                 ),
                 name="walt-monitor",
             )

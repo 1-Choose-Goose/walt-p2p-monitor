@@ -9,11 +9,13 @@ from walt_price_bot.models import BTC, ETH, QuoteSide
 from walt_price_bot.preferences import (
     SettingsAction,
     SettingsCallback,
+    build_preferences_router,
     format_preferences,
     limit_settings_keyboard,
     notification_categories_keyboard,
     parse_money,
     payment_methods_keyboard,
+    restart_quiet_hours_setup,
     return_to_main_menu,
     settings_keyboard,
     show_quiet_hours,
@@ -78,6 +80,21 @@ async def test_preferences_remember_assets_limits_intervals_and_toggles(tmp_path
     assert "BTC, ETH" in rendered
     assert "1 000 ₽ — без ограничения" in rendered
     assert "каждую 1 мин." in rendered
+
+
+@pytest.mark.asyncio
+async def test_lower_limit_cannot_exceed_saved_upper_limit(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+
+    with pytest.raises(ValueError, match="верхней"):
+        await repository.update_preferences(
+            ADMIN_TELEGRAM_ID, min_limit_from=Decimal("2500")
+        )
+
+    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    assert preferences.min_limit_from == Decimal("500")
+    assert preferences.min_limit_to == Decimal("2000")
 
 
 @pytest.mark.asyncio
@@ -174,6 +191,51 @@ async def test_quiet_hours_button_opens_presets() -> None:
         "⚙️ Свое время",
     ]
     callback.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stale_quiet_hours_step_returns_to_start_without_key_error() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), set_state=AsyncMock())
+
+    await restart_quiet_hours_setup(callback, state)
+
+    state.clear.assert_awaited_once()
+    state.set_state.assert_awaited_once()
+    callback.message.edit_text.assert_awaited_once()
+    assert "Начало тихих часов" in callback.message.edit_text.await_args.args[0]
+    callback.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stale_settings_callback_is_rejected_without_exception(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    router = build_preferences_router(repository)
+    handler = next(
+        entry.callback
+        for entry in router.callback_query.handlers
+        if entry.callback.__name__ == "setting_action"
+    )
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        message=SimpleNamespace(edit_text=AsyncMock(), edit_reply_markup=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    await handler(
+        callback,
+        SettingsCallback(action=SettingsAction.DIRECTION, value="REMOVED"),
+        AsyncMock(),
+    )
+
+    callback.answer.assert_awaited_once()
+    assert callback.answer.await_args.kwargs["show_alert"] is True
 
 
 def test_custom_quiet_hours_use_button_time_picker() -> None:

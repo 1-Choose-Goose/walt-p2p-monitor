@@ -121,6 +121,20 @@ def test_market_summary_shows_exchange_rate_without_matching_p2p_offer() -> None
     assert "Продать: подходящих P2P-объявлений нет" in text
 
 
+def test_market_summary_hides_exchange_rate_when_user_disabled_it() -> None:
+    snapshot = MarketSnapshot(
+        asset=Asset.USDT,
+        buy=None,
+        sell=None,
+        exchange_price=Decimal("85.10"),
+    )
+
+    text = format_market_summary([snapshot], show_exchange_rate=False)
+
+    assert "Coinbase" not in text
+    assert "85,10" not in text
+
+
 def test_market_summary_hides_unselected_sell_direction() -> None:
     snapshot = MarketSnapshot(
         asset=Asset.USDT,

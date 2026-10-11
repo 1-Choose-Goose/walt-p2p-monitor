@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -12,6 +13,7 @@ from .models import Asset, AssetCatalogEntry, P2PAd, QuoteSide
 
 WALT_API_URL = "https://p2p.walletbot.me/p2p/integration-api/v1/item/online"
 RETRYABLE_STATUSES = {429, 503}
+logger = logging.getLogger(__name__)
 
 
 class WaltAPIError(RuntimeError):
@@ -101,15 +103,15 @@ class WaltClient:
         )
         ads: list[P2PAd] = []
         for page in range(1, self._max_pages + 1):
-            page_ads = await self._fetch_page(entry, side, page)
+            page_ads, source_count = await self._fetch_page(entry, side, page)
             ads.extend(page_ads)
-            if len(page_ads) < 50:
+            if source_count < 50:
                 break
         return ads
 
     async def _fetch_page(
         self, asset: AssetCatalogEntry, side: QuoteSide, page: int
-    ) -> list[P2PAd]:
+    ) -> tuple[list[P2PAd], int]:
         payload = {
             "cryptoCurrency": asset.walt_code,
             "fiatCurrency": "RUB",
@@ -136,7 +138,7 @@ class WaltClient:
                     if response.status not in RETRYABLE_STATUSES:
                         raise error
                     last_error = error
-            except (aiohttp.ClientError, TimeoutError) as exc:
+            except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
                 last_error = exc
 
             if attempt < self._max_attempts:
@@ -147,13 +149,29 @@ class WaltClient:
     @staticmethod
     def _parse_response(
         payload: object, asset: AssetCatalogEntry, side: QuoteSide
-    ) -> list[P2PAd]:
+    ) -> tuple[list[P2PAd], int]:
         if not isinstance(payload, dict) or payload.get("status") != "SUCCESS":
             raise WaltAPIError("invalid Walt response status")
         data = payload.get("data")
         if not isinstance(data, list):
             raise WaltAPIError("invalid Walt response data")
-        return [WaltClient._parse_ad(item, asset, side) for item in data]
+        ads: list[P2PAd] = []
+        invalid: list[WaltAPIError] = []
+        for item in data:
+            try:
+                ads.append(WaltClient._parse_ad(item, asset, side))
+            except WaltAPIError as exc:
+                invalid.append(exc)
+        if invalid and not ads:
+            raise WaltAPIError(str(invalid[0])) from invalid[0]
+        if invalid:
+            logger.warning(
+                "Dropped %d invalid Walt ads for %s/RUB %s",
+                len(invalid),
+                asset.symbol.value,
+                side.value,
+            )
+        return ads, len(data)
 
     @staticmethod
     def _parse_ad(

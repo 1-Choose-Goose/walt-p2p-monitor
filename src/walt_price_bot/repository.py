@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import aiosqlite
@@ -211,19 +211,46 @@ class Repository:
         status: AccessStatus | None = None,
         limit: int = 10,
         offset: int = 0,
+        exclude_telegram_id: int | None = None,
     ) -> list[User]:
         if limit < 1 or limit > 100 or offset < 0:
             raise ValueError("invalid pagination")
         query = "SELECT * FROM users"
         params: list[object] = []
+        conditions: list[str] = []
         if status is not None:
-            query += " WHERE status = ?"
+            conditions.append("status = ?")
             params.append(status.value)
+        if exclude_telegram_id is not None:
+            conditions.append("telegram_id <> ?")
+            params.append(exclude_telegram_id)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY telegram_id LIMIT ? OFFSET ?"
         params.extend((limit, offset))
         async with self._connect() as db:
             rows = await (await db.execute(query, params)).fetchall()
         return [self._user_from_row(row) for row in rows]
+
+    async def count_users(
+        self,
+        *,
+        status: AccessStatus | None = None,
+        exclude_telegram_id: int | None = None,
+    ) -> int:
+        query = "SELECT COUNT(*) FROM users"
+        params: list[object] = []
+        conditions: list[str] = []
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status.value)
+        if exclude_telegram_id is not None:
+            conditions.append("telegram_id <> ?")
+            params.append(exclude_telegram_id)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        async with self._connect() as db:
+            return int(await self._scalar(db, query, tuple(params)))
 
     async def delete_user(self, telegram_id: int) -> bool:
         if telegram_id == ADMIN_TELEGRAM_ID:
@@ -471,10 +498,44 @@ class Repository:
         }
         if not changes or any(name not in columns for name in changes):
             raise ValueError("unsupported preference field")
-        assignments = ", ".join(f"{name} = ?" for name in changes)
-        values = [columns[name](value) for name, value in changes.items()]
-        values.append(telegram_id)
         async with self._connect() as db:
+            if {"min_limit_from", "min_limit_to", "desired_amount"} & changes.keys():
+                current = await (
+                    await db.execute(
+                        "SELECT min_limit_from, min_limit_to, desired_amount "
+                        "FROM user_preferences WHERE telegram_id = ?",
+                        (telegram_id,),
+                    )
+                ).fetchone()
+                if current is None:
+                    raise ValueError("unknown user")
+                try:
+                    lower = Decimal(
+                        str(changes.get("min_limit_from", current["min_limit_from"]))
+                    )
+                    upper_value = changes.get("min_limit_to", current["min_limit_to"])
+                    upper = (
+                        None if upper_value is None else Decimal(str(upper_value))
+                    )
+                    amount_value = changes.get("desired_amount", current["desired_amount"])
+                    amount = (
+                        None if amount_value is None else Decimal(str(amount_value))
+                    )
+                except (InvalidOperation, ValueError) as exc:
+                    raise ValueError("Некорректное числовое значение настройки.") from exc
+                if not lower.is_finite() or lower <= 0:
+                    raise ValueError("Нижняя граница должна быть больше нуля.")
+                if upper is not None and (not upper.is_finite() or upper <= 0):
+                    raise ValueError("Верхняя граница должна быть больше нуля.")
+                if upper is not None and lower > upper:
+                    raise ValueError(
+                        "Нижняя граница не может быть больше верхней."
+                    )
+                if amount is not None and (not amount.is_finite() or amount <= 0):
+                    raise ValueError("Сумма сделки должна быть больше нуля.")
+            assignments = ", ".join(f"{name} = ?" for name in changes)
+            values = [columns[name](value) for name, value in changes.items()]
+            values.append(telegram_id)
             cursor = await db.execute(
                 f"UPDATE user_preferences SET {assignments} WHERE telegram_id = ?", values
             )

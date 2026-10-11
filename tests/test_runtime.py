@@ -298,6 +298,55 @@ async def test_profitable_offer_notifies_selected_side_once(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_hidden_exchange_rate_still_drives_opportunity_calculation(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.update_preferences(
+        ADMIN_TELEGRAM_ID, show_exchange_rate=False
+    )
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    sender = FakeSender()
+
+    await run_monitor_cycle(
+        repository,
+        FakeProvider(),
+        sender,
+        datetime.now(UTC),
+    )
+
+    assert len(sender.messages) == 1
+    assert "выгодный лот" in sender.messages[0][1].lower()
+
+
+@pytest.mark.asyncio
+async def test_interval_summary_respects_hidden_exchange_rate(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.update_preferences(
+        ADMIN_TELEGRAM_ID,
+        show_exchange_rate=False,
+        summary_enabled=True,
+        summary_interval_minutes=1,
+    )
+    sender = FakeSender()
+
+    await run_monitor_cycle(
+        repository,
+        FakeProvider(),
+        sender,
+        datetime.now(UTC),
+    )
+
+    assert len(sender.messages) == 1
+    assert "Coinbase" not in sender.messages[0][1]
+    assert "Купить" in sender.messages[0][1]
+
+
+@pytest.mark.asyncio
 async def test_buy_slightly_above_exchange_notifies_within_premium(
     tmp_path: Path,
 ) -> None:

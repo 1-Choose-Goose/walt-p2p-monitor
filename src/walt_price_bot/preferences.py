@@ -369,6 +369,30 @@ async def show_quiet_hours(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+async def restart_quiet_hours_setup(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    await state.clear()
+    await state.set_state(PreferencesFlow.quiet_custom)
+    if callback.message:
+        await callback.message.edit_text(
+            "🌙 <b>Начало тихих часов</b>\n\nВыберите час:",
+            reply_markup=time_picker_keyboard(
+                SettingsAction.QUIET_START_HOUR, range(24)
+            ),
+        )
+    await callback.answer(
+        "Настройка устарела. Начните выбор времени заново.",
+        show_alert=True,
+    )
+
+
+async def reject_stale_setting(callback: CallbackQuery) -> None:
+    await callback.answer(
+        "Эта кнопка устарела. Откройте раздел заново.", show_alert=True
+    )
+
+
 async def assets_keyboard(repository: Repository, telegram_id: int) -> InlineKeyboardMarkup:
     selected = set(await repository.get_user_assets(telegram_id))
     rows = [
@@ -464,11 +488,15 @@ def build_preferences_router(repository: Repository) -> Router:
             )
             await callback.answer()
         elif action is SettingsAction.DIRECTION:
-            directions = {
+            direction_choices = {
                 "BUY": (QuoteSide.BUY,),
                 "SELL": (QuoteSide.SELL,),
                 "BOTH": (QuoteSide.BUY, QuoteSide.SELL),
-            }[callback_data.value]
+            }
+            directions = direction_choices.get(callback_data.value)
+            if directions is None:
+                await reject_stale_setting(callback)
+                return
             await repository.update_preferences(telegram_id, directions=directions)
             await show_settings(callback)
         elif action is SettingsAction.PAYMENT and callback.message:
@@ -506,6 +534,9 @@ def build_preferences_router(repository: Repository) -> Router:
                 )
             await callback.answer(status)
         elif action is SettingsAction.PAYMENT_SET:
+            if callback_data.value not in {"banks", "any"}:
+                await reject_stale_setting(callback)
+                return
             payments = (
                 ("sbp", "sberbankru", "russian_banks")
                 if callback_data.value == "banks"
@@ -527,6 +558,9 @@ def build_preferences_router(repository: Repository) -> Router:
             )
             await callback.answer()
         elif action is SettingsAction.MONITOR_INTERVAL:
+            if callback_data.value not in {"30", "60"}:
+                await reject_stale_setting(callback)
+                return
             await repository.update_preferences(
                 telegram_id, monitor_interval_seconds=int(callback_data.value)
             )
@@ -540,9 +574,17 @@ def build_preferences_router(repository: Repository) -> Router:
             )
             await callback.answer()
         elif action is SettingsAction.SUMMARY_INTERVAL:
+            try:
+                summary_minutes = int(callback_data.value)
+            except ValueError:
+                await reject_stale_setting(callback)
+                return
+            if not 1 <= summary_minutes <= 1440:
+                await reject_stale_setting(callback)
+                return
             await repository.update_preferences(
                 telegram_id,
-                summary_interval_minutes=int(callback_data.value),
+                summary_interval_minutes=summary_minutes,
                 summary_enabled=True,
                 notify_scheduled=True,
             )
@@ -586,6 +628,9 @@ def build_preferences_router(repository: Repository) -> Router:
                 "opportunity": current.notifications.opportunity,
             }
             field = callback_data.value
+            if field not in values:
+                await reject_stale_setting(callback)
+                return
             enabled = not values[field]
             await repository.update_preferences(
                 telegram_id, **{f"notify_{field}": enabled}
@@ -618,6 +663,9 @@ def build_preferences_router(repository: Repository) -> Router:
                 )
             await callback.answer()
         elif action is SettingsAction.QUIET_START_HOUR:
+            if callback_data.value not in {f"{hour:02d}" for hour in range(24)}:
+                await reject_stale_setting(callback)
+                return
             await state.update_data(quiet_start_hour=callback_data.value)
             if callback.message:
                 await callback.message.edit_text(
@@ -629,8 +677,15 @@ def build_preferences_router(repository: Repository) -> Router:
                 )
             await callback.answer()
         elif action is SettingsAction.QUIET_START_MINUTE:
+            if callback_data.value not in {"00", "15", "30", "45"}:
+                await reject_stale_setting(callback)
+                return
             data = await state.get_data()
-            start = f"{data['quiet_start_hour']}:{callback_data.value}"
+            start_hour = data.get("quiet_start_hour")
+            if start_hour is None:
+                await restart_quiet_hours_setup(callback, state)
+                return
+            start = f"{start_hour}:{callback_data.value}"
             await state.update_data(quiet_start=start)
             if callback.message:
                 await callback.message.edit_text(
@@ -642,6 +697,9 @@ def build_preferences_router(repository: Repository) -> Router:
                 )
             await callback.answer()
         elif action is SettingsAction.QUIET_END_HOUR:
+            if callback_data.value not in {f"{hour:02d}" for hour in range(24)}:
+                await reject_stale_setting(callback)
+                return
             await state.update_data(quiet_end_hour=callback_data.value)
             if callback.message:
                 await callback.message.edit_text(
@@ -653,9 +711,17 @@ def build_preferences_router(repository: Repository) -> Router:
                 )
             await callback.answer()
         elif action is SettingsAction.QUIET_END_MINUTE:
+            if callback_data.value not in {"00", "15", "30", "45"}:
+                await reject_stale_setting(callback)
+                return
             data = await state.get_data()
-            start = str(data["quiet_start"])
-            end = f"{data['quiet_end_hour']}:{callback_data.value}"
+            start_value = data.get("quiet_start")
+            end_hour = data.get("quiet_end_hour")
+            if start_value is None or end_hour is None:
+                await restart_quiet_hours_setup(callback, state)
+                return
+            start = str(start_value)
+            end = f"{end_hour}:{callback_data.value}"
             if start == end:
                 await callback.answer(
                     "Начало и окончание не должны совпадать.",
@@ -675,9 +741,18 @@ def build_preferences_router(repository: Repository) -> Router:
             if callback_data.value == "off":
                 await repository.update_preferences(telegram_id, quiet_enabled=False)
             else:
+                if not re.fullmatch(r"\d{4}-\d{4}", callback_data.value):
+                    await reject_stale_setting(callback)
+                    return
                 start, end = callback_data.value.split("-", 1)
                 start = f"{start[:2]}:{start[2:]}"
                 end = f"{end[:2]}:{end[2:]}"
+                if not (
+                    re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start)
+                    and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", end)
+                ):
+                    await reject_stale_setting(callback)
+                    return
                 await repository.update_preferences(
                     telegram_id, quiet_enabled=True, quiet_start=start, quiet_end=end
                 )
@@ -711,22 +786,30 @@ def build_preferences_router(repository: Repository) -> Router:
                     "Введите нижнюю границу минимального лимита в рублях."
                 )
         elif action is SettingsAction.LIMIT:
-            lower, upper = callback_data.value.split("-", 1)
-            await repository.update_preferences(
-                telegram_id,
-                min_limit_from=Decimal(lower),
-                min_limit_to=None if upper == "none" else Decimal(upper),
-            )
+            try:
+                lower, upper = callback_data.value.split("-", 1)
+                await repository.update_preferences(
+                    telegram_id,
+                    min_limit_from=Decimal(lower),
+                    min_limit_to=None if upper == "none" else Decimal(upper),
+                )
+            except (InvalidOperation, ValueError):
+                await reject_stale_setting(callback)
+                return
             await show_settings(callback)
         elif action is SettingsAction.AMOUNT:
-            await repository.update_preferences(
-                telegram_id,
-                desired_amount=(
+            try:
+                amount = (
                     None
                     if callback_data.value == "none"
                     else Decimal(callback_data.value)
-                ),
-            )
+                )
+                await repository.update_preferences(
+                    telegram_id, desired_amount=amount
+                )
+            except (InvalidOperation, ValueError):
+                await reject_stale_setting(callback)
+                return
             await show_settings(callback)
         else:
             await callback.answer("Раздел будет открыт здесь", show_alert=False)
@@ -735,10 +818,12 @@ def build_preferences_router(repository: Repository) -> Router:
     async def custom_limit(message: Message, state: FSMContext) -> None:
         try:
             value = parse_money(message.text or "")
+            await repository.update_preferences(
+                message.from_user.id, min_limit_from=value
+            )
         except ValueError as exc:
             await replace_message(message, repository, str(exc))
             return
-        await repository.update_preferences(message.from_user.id, min_limit_from=value)
         await state.clear()
         await message.delete()
         await replace_message(

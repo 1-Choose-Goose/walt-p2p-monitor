@@ -26,6 +26,18 @@ def test_settings_never_include_secrets_in_repr(tmp_path: Path) -> None:
     assert settings.walt_api_key is None
 
 
+def test_global_poll_setting_is_only_scheduler_wakeup_ceiling(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        telegram_bot_token="test-token-not-a-real-secret-value",
+        credential_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        database_path=tmp_path / "bot.db",
+        poll_interval_seconds=300,
+    )
+
+    assert settings.monitor_scheduler_tick_seconds == 15
+
+
 def test_settings_reject_invalid_credential_encryption_key(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="credential_encryption_key"):
         Settings(

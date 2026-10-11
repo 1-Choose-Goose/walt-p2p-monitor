@@ -173,13 +173,15 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 reply_markup=main_menu_keyboard(),
             )
             return
+        preferences = await repository.get_preferences(message.from_user.id)
         await replace_message(
             message,
             repository,
             format_market_summary(
                 snapshots,
                 [snapshot.asset for snapshot in snapshots],
-                (await repository.get_preferences(message.from_user.id)).directions,
+                preferences.directions,
+                show_exchange_rate=preferences.show_exchange_rate,
             ),
             reply_markup=main_menu_keyboard(),
         )
@@ -510,6 +512,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 snapshots,
                 [snapshot.asset for snapshot in snapshots],
                 preferences.directions,
+                show_exchange_rate=preferences.show_exchange_rate,
             )
         except Exception:
             text = "⚠️ Не удалось получить цены Walt. Повторите немного позже."

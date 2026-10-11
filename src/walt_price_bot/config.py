@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     poll_interval_seconds: int = Field(default=30, ge=30, le=3600)
     timezone: str = "Asia/Yekaterinburg"
 
+    @property
+    def monitor_scheduler_tick_seconds(self) -> int:
+        """Wake the scheduler often enough for every supported user interval."""
+        return min(self.poll_interval_seconds, 15)
+
     @field_validator("credential_encryption_key")
     @classmethod
     def validate_credential_encryption_key(cls, value: SecretStr) -> SecretStr:

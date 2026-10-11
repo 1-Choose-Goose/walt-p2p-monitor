@@ -87,6 +87,20 @@ def create_v4_database(path: Path) -> None:
         db.execute(
             "INSERT INTO schema_meta(singleton, version) VALUES (1, 4)"
         )
+        db.execute(
+            "INSERT INTO users(telegram_id, role, status) VALUES (?, 'ADMIN', 'ACTIVE')",
+            (ADMIN_TELEGRAM_ID,),
+        )
+        db.execute(
+            "INSERT INTO asset_catalog(symbol, walt_code, exchange_code) "
+            "VALUES ('USDT', 'USDT', 'USDT')"
+        )
+        db.execute(
+            "INSERT INTO opportunity_notification_history"
+            "(telegram_id, asset, quote_side, ad_id, notified_at) "
+            "VALUES (?, 'USDT', 'BUY', 'recent-offer', '2099-01-01T00:00:00+00:00')",
+            (ADMIN_TELEGRAM_ID,),
+        )
 
 
 @pytest.mark.asyncio
@@ -95,6 +109,10 @@ async def test_v4_database_adds_expiring_opportunity_history(tmp_path: Path) -> 
     create_v4_database(database)
 
     await Repository(database).initialize()
+
+    assert await Repository(database).was_opportunity_notified(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "recent-offer"
+    )
 
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT version FROM schema_meta").fetchone() == (5,)
@@ -105,6 +123,11 @@ async def test_v4_database_adds_expiring_opportunity_history(tmp_path: Path) -> 
             )
         }
         assert {"message_text", "expires_at"} <= columns
+        expires_at = db.execute(
+            "SELECT expires_at FROM opportunity_notification_history "
+            "WHERE ad_id = 'recent-offer'"
+        ).fetchone()[0]
+        assert expires_at.startswith("2099-01-01T00:10:00")
 
 
 @pytest.mark.asyncio
@@ -164,4 +187,26 @@ async def test_failed_legacy_copy_rolls_back_entire_migration(
         assert db.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_meta'"
         ).fetchone() == (0,)
+
+
+def test_sqlite_backup_includes_committed_wal_and_can_be_restored(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "live.db"
+    backup = tmp_path / "backup.db"
+    restored = tmp_path / "restored.db"
+    with sqlite3.connect(database) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE values_table(value TEXT NOT NULL)")
+        db.execute("INSERT INTO values_table VALUES ('saved-in-wal')")
+        db.commit()
+
+    schema.backup_sqlite_database(database, backup)
+    schema.backup_sqlite_database(backup, restored)
+
+    with sqlite3.connect(restored) as db:
+        assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert db.execute("SELECT value FROM values_table").fetchone() == (
+            "saved-in-wal",
+        )
 

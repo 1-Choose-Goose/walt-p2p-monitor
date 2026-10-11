@@ -8,7 +8,7 @@ from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
 from walt_price_bot.credentials import CredentialCipher
-from walt_price_bot.models import SEED_ASSETS, AccessStatus
+from walt_price_bot.models import SEED_ASSETS, AccessStatus, User, UserRole
 from walt_price_bot.onboarding import (
     activate_user_token,
     approve_access,
@@ -17,6 +17,7 @@ from walt_price_bot.onboarding import (
     normalize_phone,
     process_token_message,
     register_contact,
+    registration_feedback,
 )
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, DuplicatePhoneError, Repository
 from walt_price_bot.walt import TokenValidationResult, TokenValidationStatus
@@ -72,6 +73,125 @@ async def test_existing_admin_can_bind_native_phone(tmp_path: Path) -> None:
     assert admin.phone == "+79990000099"
     assert admin.status is AccessStatus.ACTIVE
     assert result.notify_admin is False
+
+
+@pytest.mark.asyncio
+async def test_revoked_user_is_not_told_that_request_was_resubmitted(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    sender = SimpleNamespace(id=101, first_name="Иван", username="ivan")
+    await register_contact(repository, contact(), sender)
+    pending = await repository.get_user(101)
+    approved = await repository.transition_user(
+        101,
+        expected=AccessStatus.PENDING,
+        new_status=AccessStatus.AWAITING_TOKEN,
+        expected_version=pending.version,
+    )
+    active = await repository.transition_user(
+        101,
+        expected=AccessStatus.AWAITING_TOKEN,
+        new_status=AccessStatus.ACTIVE,
+        expected_version=approved.version,
+    )
+    await repository.transition_user(
+        101,
+        expected=AccessStatus.ACTIVE,
+        new_status=AccessStatus.REVOKED,
+        expected_version=active.version,
+    )
+
+    result = await register_contact(repository, contact(), sender)
+
+    assert result.status is AccessStatus.REVOKED
+    assert result.notify_admin is False
+    assert "отозван" in registration_feedback(result).lower()
+    assert "отправлена" not in registration_feedback(result).lower()
+
+
+@pytest.mark.asyncio
+async def test_rejected_user_can_submit_a_fresh_request(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    sender = SimpleNamespace(id=101, first_name="Иван", username="ivan")
+    await register_contact(repository, contact(), sender)
+    pending = await repository.get_user(101)
+    await repository.transition_user(
+        101,
+        expected=AccessStatus.PENDING,
+        new_status=AccessStatus.REJECTED,
+        expected_version=pending.version,
+    )
+
+    result = await register_contact(repository, contact(), sender)
+
+    assert result.status is AccessStatus.PENDING
+    assert result.notify_admin is True
+    assert "отправлена" in registration_feedback(result).lower()
+
+
+def test_admin_user_text_escapes_telegram_html() -> None:
+    user = User(
+        telegram_id=101,
+        phone="+7<999>&\"",
+        first_name="Иван <Admin> & Co",
+        username="bad<name>",
+        role=UserRole.USER,
+        status=AccessStatus.PENDING,
+        version=0,
+    )
+
+    from walt_price_bot.admin import format_user_list
+
+    text = format_user_list([user], page=1)
+
+    assert "Иван &lt;Admin&gt; &amp; Co" in text
+    assert "+7&lt;999&gt;&amp;&quot;" in text
+    assert "Иван <Admin>" not in text
+
+
+@pytest.mark.asyncio
+async def test_new_request_notification_escapes_telegram_profile(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    router = build_onboarding_router(
+        repository,
+        CredentialCipher(SecretStr(Fernet.generate_key().decode())),
+        SimpleNamespace(),
+        ADMIN_TELEGRAM_ID,
+        SEED_ASSETS[1],
+    )
+    receive_contact = next(
+        handler.callback
+        for handler in router.message.handlers
+        if handler.callback.__name__ == "receive_contact"
+    )
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=88)),
+    )
+    sender = SimpleNamespace(
+        id=101,
+        first_name="Иван <Admin>",
+        username="bad&name",
+        full_name="Иван <Admin> & Co",
+    )
+    message = SimpleNamespace(
+        contact=contact(),
+        from_user=sender,
+        chat=SimpleNamespace(id=101),
+        bot=bot,
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=77)),
+    )
+
+    await receive_contact(message)
+
+    admin_text = bot.send_message.await_args.args[1]
+    assert "Иван &lt;Admin&gt; &amp; Co" in admin_text
+    assert "@bad&amp;name" in admin_text
+    assert "Иван <Admin>" not in admin_text
 
 
 @pytest.mark.asyncio
