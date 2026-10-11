@@ -23,9 +23,10 @@ from .keyboards import (
     phone_request_keyboard,
     remove_reply_keyboard,
 )
-from .messaging import DeleteIncomingMessagesMiddleware
+from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import AccessStatus, AssetCatalogEntry
 from .repository import ADMIN_TELEGRAM_ID, Repository
+from .ui import main_menu_keyboard
 from .walt import TokenValidationResult, TokenValidationStatus, validate_walt_token
 
 WELCOME = (
@@ -187,9 +188,13 @@ def build_onboarding_router(
                     reply_markup=phone_request_keyboard(),
                 )
                 return
-            await message.answer(
+            await replace_message(
+                message,
+                repository,
                 WELCOME,
-                reply_markup=main_navigation_keyboard(user.role),
+                reply_markup=main_menu_keyboard(
+                    user.role, await repository.is_paused(message.from_user.id)
+                ),
             )
             return
         if user and user.status is AccessStatus.PENDING:

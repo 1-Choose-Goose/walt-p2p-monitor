@@ -12,7 +12,6 @@ from .keyboards import (
     MAIN_MENU_BUTTON,
     NOTIFICATIONS_BUTTON,
     PRICES_BUTTON,
-    main_navigation_keyboard,
 )
 from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import (
@@ -26,6 +25,7 @@ from .models import (
     ScheduleKind,
     ThresholdDirection,
 )
+from .onboarding import WELCOME
 from .repository import Repository
 from .ui import (
     asset_keyboard,
@@ -44,13 +44,6 @@ from .ui import (
     parse_positive_decimal,
     side_keyboard,
     summary_settings_keyboard,
-)
-
-WELCOME = (
-    "👋 <b>Walt P2P</b>\n\n"
-    "Показываю лучшие предложения Walt в рублях и сообщаю, когда появляется "
-    "подходящая цена.\n\n"
-    "Настройте монеты, сумму и способы оплаты один раз — бот всё запомнит."
 )
 
 HELP = (
@@ -100,20 +93,6 @@ async def owner_required(event: Message | CallbackQuery | Any, repository: Repos
     return False
 
 
-async def handle_start(message: Message | Any, repository: Repository) -> None:
-    user = getattr(message, "from_user", None)
-    account = await repository.get_user(user.id) if user is not None else None
-    if account is None or account.status is not AccessStatus.ACTIVE:
-        await message.answer("Доступ к этой функции пока не открыт.")
-        return
-    await replace_message(
-        message,
-        repository,
-        WELCOME,
-        reply_markup=main_navigation_keyboard(account.role),
-    )
-
-
 def build_router(repository: Repository, market_provider: MarketProvider) -> Router:
     router = Router(name=__name__)
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
@@ -155,11 +134,6 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             entry for entry in await repository.list_assets() if entry.symbol in selected
         ]
         return asset_keyboard(prefix, entries)
-
-    @router.message(Command("start"))
-    async def start(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await handle_start(message, repository)
 
     @router.message(F.text == MAIN_MENU_BUTTON)
     async def main_menu_button(message: Message, state: FSMContext) -> None:

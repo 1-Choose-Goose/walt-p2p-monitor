@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.types import Contact
+from aiogram.types import Contact, InlineKeyboardMarkup
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
@@ -12,6 +12,7 @@ from walt_price_bot.models import SEED_ASSETS, AccessStatus
 from walt_price_bot.onboarding import (
     activate_user_token,
     approve_access,
+    build_onboarding_router,
     migrate_legacy_admin_token,
     normalize_phone,
     process_token_message,
@@ -71,6 +72,45 @@ async def test_existing_admin_can_bind_native_phone(tmp_path: Path) -> None:
     assert admin.phone == "+79990000099"
     assert admin.status is AccessStatus.ACTIVE
     assert result.notify_admin is False
+
+
+@pytest.mark.asyncio
+async def test_active_start_replaces_previous_message_with_inline_menu(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    sender = SimpleNamespace(
+        id=ADMIN_TELEGRAM_ID, first_name="Администратор", username=None
+    )
+    await register_contact(
+        repository,
+        contact(phone="8 (999) 000-00-99", user_id=ADMIN_TELEGRAM_ID),
+        sender,
+    )
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 44)
+    cipher = CredentialCipher(SecretStr(Fernet.generate_key().decode()))
+    router = build_onboarding_router(
+        repository,
+        cipher,
+        SimpleNamespace(),
+        ADMIN_TELEGRAM_ID,
+        SEED_ASSETS[1],
+    )
+    start_handler = router.message.handlers[0].callback
+    answer = AsyncMock(return_value=SimpleNamespace(message_id=77))
+    delete_message = AsyncMock()
+    message = SimpleNamespace(
+        from_user=sender,
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        bot=SimpleNamespace(delete_message=delete_message),
+        answer=answer,
+    )
+
+    await start_handler(message, AsyncMock())
+
+    delete_message.assert_awaited_once_with(ADMIN_TELEGRAM_ID, 44)
+    assert answer.await_count == 1
+    assert isinstance(answer.await_args.kwargs["reply_markup"], InlineKeyboardMarkup)
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 77
 
 
 @pytest.mark.asyncio
