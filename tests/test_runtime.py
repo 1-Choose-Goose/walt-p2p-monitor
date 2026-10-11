@@ -386,6 +386,27 @@ async def test_interval_summary_respects_hidden_exchange_rate(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_interval_summary_ignores_removed_legacy_category_flag(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.update_preferences(
+        ADMIN_TELEGRAM_ID,
+        summary_enabled=True,
+        summary_interval_minutes=60,
+        notify_scheduled=False,
+    )
+    sender = FakeSender()
+    now = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+
+    await run_monitor_cycle(repository, FakeProvider(), sender, now)
+
+    assert len(sender.messages) == 1
+    assert "актуальные цены" in sender.messages[0][1]
+    assert (await repository.get_delivery_times(ADMIN_TELEGRAM_ID))[1] == now.isoformat()
+
+
+@pytest.mark.asyncio
 async def test_buy_slightly_above_exchange_notifies_within_premium(
     tmp_path: Path,
 ) -> None:

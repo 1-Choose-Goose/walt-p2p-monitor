@@ -326,7 +326,7 @@ async def _run_monitor_cycle_locked(
             )
         )
 
-    if preferences.summary_enabled and preferences.notifications.scheduled:
+    if preferences.summary_enabled:
         from .monitoring import interval_summary_is_due
 
         _, last_summary = await repository.get_delivery_times(telegram_id)
