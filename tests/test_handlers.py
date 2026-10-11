@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram.exceptions import TelegramBadRequest
 
-from walt_price_bot.handlers import _callback_message, owner_required
+from walt_price_bot.handlers import _callback_message, build_router, owner_required
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 
 
@@ -66,3 +66,42 @@ async def test_stale_callback_restores_current_message(tmp_path: Path) -> None:
 
     callback.message.answer.assert_awaited_once()
     assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 99
+
+
+@pytest.mark.asyncio
+async def test_main_navigation_always_opens_current_prices(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    provider = SimpleNamespace(get_snapshots=AsyncMock(return_value=[]))
+    router = build_router(repository, provider)
+    main_menu = next(
+        entry.callback
+        for entry in router.message.handlers
+        if entry.callback.__name__ == "main_menu_button"
+    )
+    menu_home = next(
+        entry.callback
+        for entry in router.callback_query.handlers
+        if entry.callback.__name__ == "menu_home"
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        bot=SimpleNamespace(delete_message=AsyncMock()),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=70)),
+    )
+
+    await main_menu(message, state)
+
+    assert "актуальные цены" in message.answer.await_args.args[0]
+
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    await menu_home(callback, state)
+
+    assert "актуальные цены" in callback.message.edit_text.await_args.args[0]
+    assert provider.get_snapshots.await_count == 2

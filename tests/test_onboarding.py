@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.types import Contact, InlineKeyboardMarkup
+from aiogram.types import Contact
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
@@ -238,7 +238,7 @@ async def test_approval_deletes_separate_admin_request_message(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_active_start_replaces_previous_message_with_inline_menu(tmp_path: Path) -> None:
+async def test_active_start_opens_current_prices(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
     sender = SimpleNamespace(
@@ -251,29 +251,108 @@ async def test_active_start_replaces_previous_message_with_inline_menu(tmp_path:
     )
     await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 44)
     cipher = CredentialCipher(SecretStr(Fernet.generate_key().decode()))
+    active_home = AsyncMock()
     router = build_onboarding_router(
         repository,
         cipher,
         SimpleNamespace(),
         ADMIN_TELEGRAM_ID,
         SEED_ASSETS[1],
+        active_home=active_home,
     )
     start_handler = router.message.handlers[0].callback
     answer = AsyncMock(return_value=SimpleNamespace(message_id=77))
-    delete_message = AsyncMock()
     message = SimpleNamespace(
         from_user=sender,
         chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
-        bot=SimpleNamespace(delete_message=delete_message),
+        bot=SimpleNamespace(delete_message=AsyncMock()),
         answer=answer,
     )
 
     await start_handler(message, AsyncMock())
 
-    delete_message.assert_awaited_once_with(ADMIN_TELEGRAM_ID, 44)
-    assert answer.await_count == 1
-    assert isinstance(answer.await_args.kwargs["reply_markup"], InlineKeyboardMarkup)
-    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 77
+    active_home.assert_awaited_once_with(message)
+    answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_active_contact_registration_opens_current_prices(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    active_home = AsyncMock()
+    router = build_onboarding_router(
+        repository,
+        CredentialCipher(SecretStr(Fernet.generate_key().decode())),
+        SimpleNamespace(),
+        ADMIN_TELEGRAM_ID,
+        SEED_ASSETS[1],
+        active_home=active_home,
+    )
+    receive_contact = next(
+        handler.callback
+        for handler in router.message.handlers
+        if handler.callback.__name__ == "receive_contact"
+    )
+    sender = SimpleNamespace(
+        id=ADMIN_TELEGRAM_ID,
+        first_name="Администратор",
+        username=None,
+        full_name="Администратор",
+    )
+    message = SimpleNamespace(
+        contact=contact(phone="8 (999) 000-00-99", user_id=ADMIN_TELEGRAM_ID),
+        from_user=sender,
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        bot=SimpleNamespace(delete_message=AsyncMock(), send_message=AsyncMock()),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=78)),
+    )
+
+    await receive_contact(message)
+
+    active_home.assert_awaited_once_with(message)
+
+
+@pytest.mark.asyncio
+async def test_successful_token_registration_opens_current_prices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    sender = SimpleNamespace(id=101, first_name="Иван", username=None)
+    await register_contact(repository, contact(), sender)
+    await approve_access(repository, sender.id)
+    active_home = AsyncMock()
+    validator = AsyncMock(
+        return_value=TokenValidationResult(TokenValidationStatus.VALID)
+    )
+    monkeypatch.setattr("walt_price_bot.onboarding.validate_walt_token", validator)
+    router = build_onboarding_router(
+        repository,
+        CredentialCipher(SecretStr(Fernet.generate_key().decode())),
+        SimpleNamespace(),
+        ADMIN_TELEGRAM_ID,
+        SEED_ASSETS[1],
+        active_home=active_home,
+    )
+    receive_token = next(
+        handler.callback
+        for handler in router.message.handlers
+        if handler.callback.__name__ == "receive_token"
+    )
+    message = SimpleNamespace(
+        text="secret-token",
+        from_user=sender,
+        chat=SimpleNamespace(id=sender.id),
+        bot=SimpleNamespace(delete_message=AsyncMock()),
+        delete=AsyncMock(),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=79)),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+
+    await receive_token(message, state)
+
+    state.clear.assert_awaited_once()
+    active_home.assert_awaited_once_with(message)
 
 
 @pytest.mark.asyncio

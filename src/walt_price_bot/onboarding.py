@@ -197,6 +197,8 @@ def build_onboarding_router(
     session: Any,
     admin_id: int,
     probe_asset: AssetCatalogEntry,
+    *,
+    active_home: Callable[[Message], Awaitable[None]] | None = None,
 ) -> Router:
     if admin_id != ADMIN_TELEGRAM_ID:
         raise ValueError("administrator id cannot be overridden")
@@ -217,14 +219,17 @@ def build_onboarding_router(
                     reply_markup=phone_request_keyboard(),
                 )
                 return
-            await replace_message(
-                message,
-                repository,
-                WELCOME,
-                reply_markup=main_menu_keyboard(
-                    user.role, await repository.is_paused(message.from_user.id)
-                ),
-            )
+            if active_home is not None:
+                await active_home(message)
+            else:
+                await replace_message(
+                    message,
+                    repository,
+                    WELCOME,
+                    reply_markup=main_menu_keyboard(
+                        user.role, await repository.is_paused(message.from_user.id)
+                    ),
+                )
             return
         if user and user.status is AccessStatus.PENDING:
             await replace_message(
@@ -270,6 +275,8 @@ def build_onboarding_router(
             registration_feedback(result),
             reply_markup=reply_markup,
         )
+        if result.status is AccessStatus.ACTIVE and active_home is not None:
+            await active_home(message)
         if result.notify_admin:
             username = (
                 f"@{escape(message.from_user.username)}"
@@ -341,5 +348,7 @@ def build_onboarding_router(
         )
         if result.status is TokenValidationStatus.VALID:
             await state.clear()
+            if active_home is not None:
+                await active_home(message)
 
     return router

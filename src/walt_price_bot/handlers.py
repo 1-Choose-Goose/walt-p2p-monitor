@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -26,7 +27,6 @@ from .models import (
     ScheduleKind,
     ThresholdDirection,
 )
-from .onboarding import WELCOME
 from .repository import Repository
 from .ui import (
     asset_keyboard,
@@ -84,6 +84,71 @@ class OpportunityFlow(StatesGroup):
     custom_premium = State()
 
 
+async def snapshots_for_user(
+    repository: Repository,
+    market_provider: MarketProvider,
+    telegram_id: int,
+) -> list[MarketSnapshot]:
+    account = await repository.get_user(telegram_id)
+    provider = market_provider
+    if hasattr(market_provider, "for_user"):
+        provider = await market_provider.for_user(account)
+    preferences = await repository.get_preferences(telegram_id)
+    selected = set(preferences.assets)
+    assets = [
+        entry for entry in await repository.list_assets() if entry.symbol in selected
+    ]
+    filters = MarketFilters(
+        directions=preferences.directions,
+        min_limit_from=preferences.min_limit_from,
+        min_limit_to=preferences.min_limit_to,
+        desired_amount=preferences.desired_amount,
+        buy_payments=preferences.buy_payments,
+        sell_payments=preferences.sell_payments,
+    )
+    try:
+        snapshots = await provider.get_snapshots(assets, filters)
+    except TypeError:
+        snapshots = await provider.get_snapshots()
+    return [snapshot for snapshot in snapshots if snapshot.asset in selected]
+
+
+async def current_prices_view(
+    repository: Repository,
+    market_provider: MarketProvider,
+    telegram_id: int,
+) -> tuple[str, Any]:
+    account = await repository.get_user(telegram_id)
+    if account is None:
+        raise ValueError("unknown user")
+    menu = main_menu_keyboard(account.role, await repository.is_paused(telegram_id))
+    try:
+        snapshots = await snapshots_for_user(repository, market_provider, telegram_id)
+        preferences = await repository.get_preferences(telegram_id)
+        text = format_market_summary(
+            snapshots,
+            [snapshot.asset for snapshot in snapshots],
+            preferences.directions,
+            show_exchange_rate=preferences.show_exchange_rate,
+        )
+    except Exception:
+        text = "⚠️ Не удалось получить цены Walt. Повторите немного позже."
+    return text, menu
+
+
+def build_current_prices_opener(
+    repository: Repository,
+    market_provider: MarketProvider,
+) -> Callable[[Message], Awaitable[None]]:
+    async def open_current_prices(message: Message) -> None:
+        text, menu = await current_prices_view(
+            repository, market_provider, message.from_user.id
+        )
+        await replace_message(message, repository, text, reply_markup=menu)
+
+    return open_current_prices
+
+
 async def owner_required(event: Message | CallbackQuery | Any, repository: Repository) -> bool:
     user = getattr(event, "from_user", None)
     account = await repository.get_user(user.id) if user is not None else None
@@ -96,9 +161,17 @@ async def owner_required(event: Message | CallbackQuery | Any, repository: Repos
     return False
 
 
-def build_router(repository: Repository, market_provider: MarketProvider) -> Router:
+def build_router(
+    repository: Repository,
+    market_provider: MarketProvider,
+    *,
+    active_home: Callable[[Message], Awaitable[None]] | None = None,
+) -> Router:
     router = Router(name=__name__)
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
+    open_current_prices = active_home or build_current_prices_opener(
+        repository, market_provider
+    )
 
     async def update_callback(
         callback: CallbackQuery, text: str, reply_markup: Any | None = None
@@ -106,30 +179,6 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         await _callback_message(
             callback, repository, text, reply_markup=reply_markup
         )
-
-    async def snapshots_for(telegram_id: int) -> list[MarketSnapshot]:
-        account = await repository.get_user(telegram_id)
-        provider = market_provider
-        if hasattr(market_provider, "for_user"):
-            provider = await market_provider.for_user(account)
-        preferences = await repository.get_preferences(telegram_id)
-        selected = set(preferences.assets)
-        assets = [
-            entry for entry in await repository.list_assets() if entry.symbol in selected
-        ]
-        filters = MarketFilters(
-            directions=preferences.directions,
-            min_limit_from=preferences.min_limit_from,
-            min_limit_to=preferences.min_limit_to,
-            desired_amount=preferences.desired_amount,
-            buy_payments=preferences.buy_payments,
-            sell_payments=preferences.sell_payments,
-        )
-        try:
-            snapshots = await provider.get_snapshots(assets, filters)
-        except TypeError:
-            snapshots = await provider.get_snapshots()
-        return [snapshot for snapshot in snapshots if snapshot.asset in selected]
 
     async def user_asset_keyboard(prefix: str, telegram_id: int):
         selected = set(await repository.get_user_assets(telegram_id))
@@ -152,12 +201,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if not await owner_required(message, repository):
             return
         await state.clear()
-        await replace_message(
-            message,
-            repository,
-            WELCOME,
-            reply_markup=await user_main_menu(message.from_user.id),
-        )
+        await open_current_prices(message)
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
@@ -174,28 +218,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
     async def price_command(message: Message) -> None:
         if not await owner_required(message, repository):
             return
-        try:
-            snapshots = await snapshots_for(message.from_user.id)
-        except Exception:
-            await replace_message(
-                message,
-                repository,
-                "⚠️ Не удалось получить цены Walt. Повторите немного позже.",
-                reply_markup=await user_main_menu(message.from_user.id),
-            )
-            return
-        preferences = await repository.get_preferences(message.from_user.id)
-        await replace_message(
-            message,
-            repository,
-            format_market_summary(
-                snapshots,
-                [snapshot.asset for snapshot in snapshots],
-                preferences.directions,
-                show_exchange_rate=preferences.show_exchange_rate,
-            ),
-            reply_markup=await user_main_menu(message.from_user.id),
-        )
+        await open_current_prices(message)
 
     @router.message(F.text == NOTIFICATIONS_BUTTON)
     async def notifications_button(message: Message) -> None:
@@ -378,7 +401,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             side = QuoteSide(data["side"])
             snapshot = next(
                 item
-                for item in await snapshots_for(message.from_user.id)
+                for item in await snapshots_for_user(
+                    repository, market_provider, message.from_user.id
+                )
                 if item.asset == asset
             )
             offer = snapshot.buy if side is QuoteSide.BUY else snapshot.sell
@@ -517,7 +542,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if not await owner_required(callback, repository):
             return
         try:
-            snapshots = await snapshots_for(callback.from_user.id)
+            snapshots = await snapshots_for_user(
+                repository, market_provider, callback.from_user.id
+            )
             preferences = await repository.get_preferences(callback.from_user.id)
             text = format_market_summary(
                 snapshots,
@@ -535,9 +562,10 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
     async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.clear()
-            await update_callback(
-                callback, WELCOME, await user_main_menu(callback.from_user.id)
+            text, menu = await current_prices_view(
+                repository, market_provider, callback.from_user.id
             )
+            await update_callback(callback, text, menu)
 
     @router.callback_query(F.data == "menu:notifications")
     async def menu_notifications(callback: CallbackQuery) -> None:
