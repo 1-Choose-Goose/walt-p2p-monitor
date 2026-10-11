@@ -1,5 +1,5 @@
 import re
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
@@ -14,9 +14,10 @@ from .access import AccessRequirement
 from .keyboards import SETTINGS_BUTTON
 from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import Asset, QuoteSide, UserPreferences
-from .onboarding import WELCOME
 from .repository import Repository
 from .ui import main_menu_keyboard, summary_settings_keyboard
+
+HomeView = Callable[[int], Awaitable[tuple[str, InlineKeyboardMarkup]]]
 
 
 class SettingsAction(StrEnum):
@@ -342,19 +343,17 @@ def time_picker_keyboard(
 
 
 async def return_to_main_menu(
-    callback: CallbackQuery, state: FSMContext, repository: Repository
+    callback: CallbackQuery,
+    state: FSMContext,
+    repository: Repository,
+    home_view: HomeView,
 ) -> None:
     await state.clear()
     if callback.message:
-        account = await repository.get_user(callback.from_user.id)
-        if account is None:
-            raise ValueError("unknown user")
+        text, markup = await home_view(callback.from_user.id)
         await callback.message.edit_text(
-            WELCOME,
-            reply_markup=main_menu_keyboard(
-                account.role,
-                await repository.is_paused(callback.from_user.id),
-            ),
+            text,
+            reply_markup=markup,
         )
     await callback.answer()
 
@@ -427,7 +426,7 @@ async def assets_keyboard(repository: Repository, telegram_id: int) -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_preferences_router(repository: Repository) -> Router:
+def build_preferences_router(repository: Repository, *, home_view: HomeView) -> Router:
     router = Router(name="preferences")
     router.message.outer_middleware(DeleteIncomingMessagesMiddleware())
 
@@ -777,7 +776,7 @@ def build_preferences_router(repository: Repository) -> Router:
             await repository.reset_preferences(telegram_id)
             await show_settings(callback)
         elif action is SettingsAction.HOME:
-            await return_to_main_menu(callback, state, repository)
+            await return_to_main_menu(callback, state, repository, home_view)
         elif (
             action in {SettingsAction.LIMIT, SettingsAction.LIMIT_NO_MAX}
             or action is SettingsAction.AMOUNT

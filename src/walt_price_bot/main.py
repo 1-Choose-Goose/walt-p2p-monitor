@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+from functools import partial
 from typing import Any
 
 import aiohttp
@@ -16,7 +17,7 @@ from .config import Settings
 from .credentials import CredentialCipher
 from .exchange import CoinbaseRatesClient
 from .fsm_storage import SQLiteFSMStorage
-from .handlers import build_current_prices_opener, build_router
+from .handlers import build_current_prices_opener, build_router, current_prices_view
 from .messaging import ReplacingSender
 from .models import SEED_ASSETS
 from .monitoring import UserMarketProviderFactory, monitor_multi_user_forever
@@ -144,7 +145,12 @@ async def run() -> None:
                 )
             )
             dispatcher.include_router(build_admin_router(repository, ADMIN_TELEGRAM_ID))
-            dispatcher.include_router(build_preferences_router(repository))
+            dispatcher.include_router(
+                build_preferences_router(
+                    repository,
+                    home_view=partial(current_prices_view, repository, factory),
+                )
+            )
             dispatcher.include_router(
                 build_router(repository, factory, active_home=active_home)
             )

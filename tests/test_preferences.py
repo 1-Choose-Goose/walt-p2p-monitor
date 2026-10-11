@@ -25,6 +25,7 @@ from walt_price_bot.preferences import (
     toggle_payment_method,
 )
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
+from walt_price_bot.ui import main_menu_keyboard
 
 
 @pytest.mark.parametrize(
@@ -102,7 +103,7 @@ async def test_lower_limit_cannot_exceed_saved_upper_limit(tmp_path: Path) -> No
 async def test_custom_transaction_amount_is_saved_and_confirmed(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    router = build_preferences_router(repository)
+    router = build_preferences_router(repository, home_view=AsyncMock())
     handler = next(
         entry.callback
         for entry in router.message.handlers
@@ -203,11 +204,19 @@ async def test_settings_home_button_restores_admin_main_menu(tmp_path: Path) -> 
         answer=AsyncMock(),
     )
     state = SimpleNamespace(clear=AsyncMock())
+    home_view = AsyncMock(
+        return_value=(
+            "📊 Walt P2P — актуальные цены",
+            main_menu_keyboard(role=(await repository.get_user(ADMIN_TELEGRAM_ID)).role),
+        )
+    )
 
-    await return_to_main_menu(callback, state, repository)
+    await return_to_main_menu(callback, state, repository, home_view)
 
     state.clear.assert_awaited_once()
     callback.message.edit_text.assert_awaited_once()
+    assert "актуальные цены" in callback.message.edit_text.await_args.args[0]
+    home_view.assert_awaited_once_with(ADMIN_TELEGRAM_ID)
     markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
     assert markup.inline_keyboard[0][0].text == "💱 Текущие цены"
     assert any(button.text == "👥 Пользователи" for row in markup.inline_keyboard for button in row)
@@ -257,7 +266,7 @@ async def test_stale_settings_callback_is_rejected_without_exception(
 ) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
-    router = build_preferences_router(repository)
+    router = build_preferences_router(repository, home_view=AsyncMock())
     handler = next(
         entry.callback
         for entry in router.callback_query.handlers
