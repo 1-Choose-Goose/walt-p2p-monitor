@@ -38,6 +38,12 @@ def test_installer_force_reinstalls_updated_application_package() -> None:
     assert "backup_sqlite_database" in text
     assert 'cp -a -- "${database_file}" "${backup_file}"' not in text
     assert "systemctl stop walt-price-bot.service" in text
+    upgrade_phase = text.index('Settings(_env_file=Path(sys.argv[1]))')
+    final_stop = text.index("systemctl stop walt-price-bot.service", upgrade_phase)
+    final_backup = text.index("backup_file=${database_file}.pre-upgrade", upgrade_phase)
+    assert final_stop < final_backup
+    assert "asyncio.run(Repository(database).initialize())" in text
+    assert 'PRAGMA integrity_check' in text
 
 
 def test_installer_generates_encryption_key_once_and_protects_env_file() -> None:
@@ -72,3 +78,6 @@ def test_installer_preflights_before_stopping_and_rolls_back_failure() -> None:
     assert "systemctl is-active --quiet walt-price-bot.service" in text
     assert "systemctl is-enabled --quiet walt-price-bot.service" in text
     assert "runuser -u waltbot" not in text
+    assert "stable_checks" in text
+    assert "systemctl show -p SubState" in text
+    assert "sleep 2" not in text

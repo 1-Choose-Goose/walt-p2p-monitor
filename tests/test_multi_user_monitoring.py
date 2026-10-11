@@ -7,6 +7,7 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 
+import walt_price_bot.monitoring as monitoring_module
 from walt_price_bot.credentials import CredentialCipher
 from walt_price_bot.models import AccessStatus, Asset, MarketSnapshot, QuietHours
 from walt_price_bot.monitoring import (
@@ -261,3 +262,46 @@ async def test_opportunity_and_message_delivery_use_distinct_locks(tmp_path: Pat
     await repository.initialize()
 
     assert repository.opportunity_lock(768929900) is not repository.user_lock(768929900)
+
+
+@pytest.mark.asyncio
+async def test_global_history_cleanup_runs_once_per_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    moments = iter(
+        (
+            datetime(2026, 10, 11, 5, 0, tzinfo=UTC),
+            datetime(2026, 10, 11, 5, 0, 15, tzinfo=UTC),
+            datetime(2026, 10, 11, 5, 1, 1, tzinfo=UTC),
+        )
+    )
+
+    class Clock:
+        @classmethod
+        def now(cls, timezone: object) -> datetime:
+            return next(moments)
+
+    repository = AsyncMock()
+    cycles = 0
+
+    async def fake_cycle(*args: object, **kwargs: object) -> None:
+        nonlocal cycles
+        cycles += 1
+
+    async def stop_after_three(_: float) -> None:
+        if cycles >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitoring_module, "datetime", Clock)
+    monkeypatch.setattr(monitoring_module, "run_multi_user_cycle", fake_cycle)
+
+    with pytest.raises(asyncio.CancelledError):
+        await monitoring_module.monitor_multi_user_forever(
+            repository,
+            AsyncMock(),
+            AsyncMock(),
+            sleep=stop_after_three,
+        )
+
+    assert repository.prune_opportunity_history.await_count == 2
+    assert cycles == 3

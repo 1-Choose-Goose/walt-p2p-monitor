@@ -65,6 +65,21 @@ class FakeExchangeClient:
         }[symbol]
 
 
+class MultiOfferWaltClient(FakeWaltClient):
+    async def fetch_ads(self, asset, side: QuoteSide) -> list[P2PAd]:
+        symbol = getattr(asset, "symbol", asset)
+        self.calls.append((symbol, side))
+        prices = ("91.00", "88.00", "90.00") if side is QuoteSide.SELL else (
+            "87.00",
+            "92.00",
+            "89.00",
+        )
+        return [
+            ad(symbol, side, price, identifier=f"{symbol}-{side}-{index}")
+            for index, price in enumerate(prices)
+        ]
+
+
 class FailingExchangeClient:
     async def fetch_rub_rate(self, asset: Asset) -> Decimal:
         raise RuntimeError(f"{asset.value} unavailable")
@@ -147,6 +162,33 @@ async def test_market_service_fetches_each_market_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_market_service_reuses_one_fetch_for_best_and_all_candidates() -> None:
+    client = MultiOfferWaltClient()
+
+    snapshots = await MarketService(client, FakeExchangeClient()).get_snapshots(
+        assets=(SEED_ASSETS[1],)
+    )
+
+    assert client.calls == [
+        (Asset.USDT, QuoteSide.BUY),
+        (Asset.USDT, QuoteSide.SELL),
+    ]
+    snapshot = snapshots[0]
+    assert snapshot.buy.price == Decimal("88.00")
+    assert [offer.price for offer in snapshot.buy_offers] == [
+        Decimal("88.00"),
+        Decimal("90.00"),
+        Decimal("91.00"),
+    ]
+    assert snapshot.sell.price == Decimal("92.00")
+    assert [offer.price for offer in snapshot.sell_offers] == [
+        Decimal("92.00"),
+        Decimal("89.00"),
+        Decimal("87.00"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_market_service_keeps_exchange_rates_when_p2p_offers_are_unavailable() -> None:
     snapshots = await MarketService(EmptyWaltClient(), FakeExchangeClient()).get_snapshots()
 
@@ -217,12 +259,9 @@ async def test_monitor_uses_one_snapshot_for_multiple_rules_and_commits_success(
     await run_monitor_cycle(repository, provider, sender, datetime.now(UTC))
 
     assert provider.calls == 1
-    assert len(sender.messages) == 2
-    assert all("ниже или равно" in text for _, text in sender.messages)
-    assert all(
-        'href="https://telegram.me/walt/start?startapp=v2-' in text
-        for _, text in sender.messages
-    )
+    assert len(sender.messages) == 1
+    assert sender.messages[0][1].count("ниже или равно") == 2
+    assert 'href="https://telegram.me/walt/start?startapp=v2-' in sender.messages[0][1]
     assert all(
         rule.armed is False
         for rule in await repository.list_alerts(ADMIN_TELEGRAM_ID)
@@ -425,6 +464,121 @@ async def test_multiple_opportunities_are_delivered_in_one_message(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_all_profitable_ads_are_recorded_and_digest_shows_first_five(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    offers = tuple(
+        ad(Asset.USDT, QuoteSide.SELL, str(price), identifier=f"offer-{index}")
+        for index, price in enumerate(("80", "81", "82", "83", "84", "85", "89"))
+    )
+    provider = FakeProvider()
+    provider.snapshots = [
+        MarketSnapshot(
+            asset=Asset.USDT,
+            buy=offers[0],
+            sell=None,
+            exchange_price=Decimal("90"),
+            buy_offers=offers,
+        )
+    ]
+    sender = FakeSender()
+    now = datetime.now(UTC)
+
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    assert len(sender.messages) == 1
+    assert sender.messages[0][1].count("Расчётно выгодный лот: покупка USDT") == 5
+    assert "Ещё предложений в истории: 2" in sender.messages[0][1]
+    assert await repository.count_opportunity_history(ADMIN_TELEGRAM_ID, now) == 7
+
+
+@pytest.mark.asyncio
+async def test_large_opportunity_digest_stays_within_telegram_limit(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BOTH,
+        min_spread_percent=Decimal("1"),
+    )
+    now = datetime.now(UTC)
+    snapshots = []
+    for asset in (Asset.GRAM, Asset.USDT, Asset.BTC, Asset.NOT, Asset.ETH):
+        buys = tuple(
+            ad(asset, QuoteSide.SELL, str(80 + index), identifier=f"{asset}-buy-{index}")
+            for index in range(10)
+        )
+        sells = tuple(
+            ad(asset, QuoteSide.BUY, str(120 - index), identifier=f"{asset}-sell-{index}")
+            for index in range(10)
+        )
+        snapshots.append(
+            MarketSnapshot(
+                asset=asset,
+                buy=buys[0],
+                sell=sells[0],
+                exchange_price=Decimal("100"),
+                captured_at=now,
+                buy_offers=buys,
+                sell_offers=sells,
+            )
+        )
+    provider = FakeProvider()
+    provider.snapshots = snapshots
+    sender = FakeSender()
+
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    assert len(sender.messages) == 1
+    assert len(sender.messages[0][1]) <= 4000
+    assert "Ещё предложений в истории" in sender.messages[0][1]
+    assert await repository.count_opportunity_history(ADMIN_TELEGRAM_ID, now) == 100
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_alert_opportunity_and_summary_use_one_delivery(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    alert_id = await repository.add_alert(
+        ADMIN_TELEGRAM_ID,
+        kind=AlertKind.THRESHOLD,
+        asset=Asset.USDT,
+        quote_side=QuoteSide.BUY,
+        threshold_direction=ThresholdDirection.BELOW,
+        target="90",
+    )
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    await repository.update_preferences(
+        ADMIN_TELEGRAM_ID, summary_enabled=True, summary_interval_minutes=1
+    )
+    sender = FakeSender()
+    now = datetime.now(UTC)
+
+    await run_monitor_cycle(repository, FakeProvider(), sender, now)
+
+    assert len(sender.messages) == 1
+    delivered = sender.messages[0][1]
+    assert "достигнут ценовой порог" in delivered
+    assert "Расчётно выгодный лот" in delivered
+    assert "USDT / RUB" in delivered
+    rules = await repository.list_alerts(ADMIN_TELEGRAM_ID)
+    assert next(rule for rule in rules if rule.id == alert_id).armed is False
+    assert (await repository.get_delivery_times(ADMIN_TELEGRAM_ID))[1] == now.isoformat()
+
+
+@pytest.mark.asyncio
 async def test_opportunities_only_include_assets_selected_by_user(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.replace_user_assets(ADMIN_TELEGRAM_ID, (Asset.USDT,))
@@ -492,6 +646,53 @@ async def test_opportunity_history_prevents_a_b_a_repeat(tmp_path: Path) -> None
     await run_monitor_cycle(repository, provider, sender, now)
 
     assert len(sender.messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_profitable_offer_can_repeat_at_ten_minute_boundary(
+    tmp_path: Path,
+) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    provider = FakeProvider()
+    sender = FakeSender()
+    now = datetime.now(UTC)
+
+    await run_monitor_cycle(repository, provider, sender, now)
+    first_id = (await repository.list_opportunity_history(ADMIN_TELEGRAM_ID, now))[0].id
+    provider.snapshots = [
+        MarketSnapshot(
+            asset=snapshot.asset,
+            buy=snapshot.buy,
+            sell=snapshot.sell,
+            exchange_price=snapshot.exchange_price,
+            captured_at=now + timedelta(minutes=9, seconds=59),
+        )
+        for snapshot in provider.snapshots
+    ]
+    await run_monitor_cycle(repository, provider, sender, now + timedelta(minutes=9, seconds=59))
+    provider.snapshots = [
+        MarketSnapshot(
+            asset=snapshot.asset,
+            buy=snapshot.buy,
+            sell=snapshot.sell,
+            exchange_price=snapshot.exchange_price,
+            captured_at=now + timedelta(minutes=10),
+        )
+        for snapshot in provider.snapshots
+    ]
+    await run_monitor_cycle(repository, provider, sender, now + timedelta(minutes=10))
+
+    assert len(sender.messages) == 2
+    repeated = await repository.list_opportunity_history(
+        ADMIN_TELEGRAM_ID, now + timedelta(minutes=10)
+    )
+    assert len(repeated) == 1
+    assert repeated[0].id > first_id
 
 
 @pytest.mark.asyncio

@@ -547,11 +547,21 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 opportunity_mode_keyboard(settings),
             )
 
-    @router.callback_query(F.data == "menu:opportunity-history")
+    @router.callback_query(F.data.startswith("menu:opportunity-history"))
     async def menu_opportunity_history(callback: CallbackQuery) -> None:
         if not await owner_required(callback, repository):
             return
-        entries = await repository.list_opportunity_history(callback.from_user.id)
+        try:
+            page = int(callback.data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            page = 0
+        page = max(page, 0)
+        page_size = 15
+        total = await repository.count_opportunity_history(callback.from_user.id)
+        page = min(page, max((total - 1) // page_size, 0))
+        entries = await repository.list_opportunity_history(
+            callback.from_user.id, limit=page_size, offset=page * page_size
+        )
         preferences = await repository.get_preferences(callback.from_user.id)
         text = (
             "🕘 <b>История выгодных лотов</b>\n\n"
@@ -562,7 +572,13 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         await update_callback(
             callback,
             text,
-            opportunity_history_keyboard(entries, ZoneInfo(preferences.timezone)),
+            opportunity_history_keyboard(
+                entries,
+                ZoneInfo(preferences.timezone),
+                page=page,
+                total=total,
+                page_size=page_size,
+            ),
         )
 
     @router.callback_query(F.data.startswith("opportunity-history:open:"))
@@ -570,26 +586,47 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if not await owner_required(callback, repository):
             return
         try:
-            entry_id = int(callback.data.rsplit(":", 1)[1])
-        except (TypeError, ValueError):
+            parts = callback.data.split(":")
+            raw_id = parts[2]
+            raw_page = parts[3] if len(parts) == 4 else "0"
+            if len(parts) not in {3, 4}:
+                raise ValueError
+            entry_id = int(raw_id)
+            page = max(int(raw_page), 0)
+            if not 0 < entry_id <= 9_223_372_036_854_775_807:
+                raise ValueError
+        except (AttributeError, IndexError, TypeError, ValueError):
             await callback.answer("Предложение уже недоступно.", show_alert=True)
             return
         entry = await repository.get_opportunity_history_entry(
             callback.from_user.id, entry_id
         )
         if entry is None:
-            entries = await repository.list_opportunity_history(callback.from_user.id)
+            page_size = 15
+            total = await repository.count_opportunity_history(callback.from_user.id)
+            page = min(page, max((total - 1) // page_size, 0))
+            entries = await repository.list_opportunity_history(
+                callback.from_user.id,
+                limit=page_size,
+                offset=page * page_size,
+            )
             preferences = await repository.get_preferences(callback.from_user.id)
             await update_callback(
                 callback,
                 "⌛ Предложение уже удалено: прошло больше 10 минут.",
-                opportunity_history_keyboard(entries, ZoneInfo(preferences.timezone)),
+                opportunity_history_keyboard(
+                    entries,
+                    ZoneInfo(preferences.timezone),
+                    page=page,
+                    total=total,
+                    page_size=page_size,
+                ),
             )
             return
         await update_callback(
             callback,
             entry.message_text,
-            opportunity_history_detail_keyboard(),
+            opportunity_history_detail_keyboard(page),
         )
 
     @router.callback_query(

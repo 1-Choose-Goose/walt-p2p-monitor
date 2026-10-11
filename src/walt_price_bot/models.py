@@ -201,6 +201,8 @@ class MarketSnapshot:
     buy_source_available: bool = True
     sell_source_available: bool = True
     captured_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    buy_offers: tuple[P2PAd, ...] = ()
+    sell_offers: tuple[P2PAd, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

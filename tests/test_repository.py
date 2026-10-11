@@ -190,6 +190,32 @@ async def test_opportunity_history_persists_all_ads_across_restart(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_changing_opportunity_settings_preserves_active_history(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    now = datetime.now(UTC)
+    await repository.mark_opportunities_notified(
+        ADMIN_TELEGRAM_ID,
+        [(Asset.USDT, QuoteSide.BUY, "offer-a", "Лот")],
+        now,
+    )
+
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.SELL,
+        min_spread_percent=Decimal("3"),
+        max_buy_premium_percent=Decimal("1"),
+    )
+
+    assert await repository.was_opportunity_notified(
+        ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-a", now
+    )
+    assert await repository.count_opportunity_history(ADMIN_TELEGRAM_ID, now) == 1
+
+
+@pytest.mark.asyncio
 async def test_visible_opportunity_history_is_deleted_after_ten_minutes(
     tmp_path: Path,
 ) -> None:
@@ -215,6 +241,9 @@ async def test_visible_opportunity_history_is_deleted_after_ten_minutes(
         ADMIN_TELEGRAM_ID, created_at + timedelta(minutes=10)
     )
     assert expired == []
+    assert await repository.prune_opportunity_history(
+        created_at + timedelta(minutes=10)
+    ) == 1
 
     async with repository._connect() as db:
         count = await repository._scalar(
@@ -223,6 +252,83 @@ async def test_visible_opportunity_history_is_deleted_after_ten_minutes(
             (ADMIN_TELEGRAM_ID,),
         )
     assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_opportunity_history_uses_non_reusable_ids_and_pagination(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    created_at = datetime(2026, 10, 11, 3, 0, tzinfo=UTC)
+
+    for index in range(50):
+        await repository.save_opportunity_history(
+            ADMIN_TELEGRAM_ID,
+            Asset.USDT,
+            QuoteSide.BUY,
+            f"offer-{index}",
+            f"Лот {index}",
+            created_at + timedelta(seconds=index),
+        )
+
+    pages = [
+        await repository.list_opportunity_history(
+            ADMIN_TELEGRAM_ID,
+            created_at + timedelta(minutes=1),
+            limit=15,
+            offset=offset,
+        )
+        for offset in (0, 15, 30, 45)
+    ]
+    assert [len(page) for page in pages] == [15, 15, 15, 5]
+    assert [entry.message_text for page in pages for entry in page] == [
+        f"Лот {index}" for index in range(49, -1, -1)
+    ]
+    assert await repository.count_opportunity_history(
+        ADMIN_TELEGRAM_ID, created_at + timedelta(minutes=1)
+    ) == 50
+
+    deleted_id = pages[-1][-1].id
+    async with repository._connect() as db:
+        await db.execute(
+            "DELETE FROM opportunity_notification_history WHERE id = ?", (deleted_id,)
+        )
+        await db.commit()
+    await repository.save_opportunity_history(
+        ADMIN_TELEGRAM_ID,
+        Asset.BTC,
+        QuoteSide.SELL,
+        "replacement",
+        "Новый лот",
+        created_at + timedelta(minutes=2),
+    )
+    newest = (
+        await repository.list_opportunity_history(
+            ADMIN_TELEGRAM_ID, created_at + timedelta(minutes=2), limit=1
+        )
+    )[0]
+    assert newest.id > deleted_id
+
+
+@pytest.mark.asyncio
+async def test_recent_opportunity_keys_are_isolated_by_user(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    now = datetime(2026, 10, 11, 3, 0, tzinfo=UTC)
+    await repository.mark_opportunities_notified(
+        ADMIN_TELEGRAM_ID,
+        [(Asset.USDT, QuoteSide.BUY, "offer-a", "Лот")],
+        now,
+    )
+
+    assert await repository.get_recent_opportunity_keys(ADMIN_TELEGRAM_ID, now) == {
+        (Asset.USDT, QuoteSide.BUY, "offer-a")
+    }
+    assert await repository.get_recent_opportunity_keys(999, now) == set()
+    assert await repository.get_recent_opportunity_keys(
+        ADMIN_TELEGRAM_ID, now + timedelta(minutes=10)
+    ) == set()
 
 
 @pytest.mark.asyncio

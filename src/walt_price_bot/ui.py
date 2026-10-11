@@ -256,6 +256,10 @@ def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
 def opportunity_history_keyboard(
     entries: list[OpportunityHistoryEntry],
     timezone: ZoneInfo = DEFAULT_HISTORY_TIMEZONE,
+    *,
+    page: int = 0,
+    total: int | None = None,
+    page_size: int = 15,
 ) -> InlineKeyboardMarkup:
     rows = []
     for entry in entries:
@@ -266,23 +270,39 @@ def opportunity_history_keyboard(
             [
                 InlineKeyboardButton(
                     text=f"{icon} {action} {entry.asset.value} · {local_time}",
-                    callback_data=f"opportunity-history:open:{entry.id}",
+                    callback_data=f"opportunity-history:open:{entry.id}:{page}",
                 )
             ]
         )
+    total = len(entries) if total is None else total
+    navigation = []
+    if page > 0:
+        navigation.append(
+            InlineKeyboardButton(
+                text="⬅️ Новее", callback_data=f"menu:opportunity-history:{page - 1}"
+            )
+        )
+    if (page + 1) * page_size < total:
+        navigation.append(
+            InlineKeyboardButton(
+                text="Старше ➡️", callback_data=f"menu:opportunity-history:{page + 1}"
+            )
+        )
+    if navigation:
+        rows.append(navigation)
     rows.append(
         [InlineKeyboardButton(text="Назад", callback_data="menu:notifications")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def opportunity_history_detail_keyboard() -> InlineKeyboardMarkup:
+def opportunity_history_detail_keyboard(page: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⬅️ К истории",
-                    callback_data="menu:opportunity-history",
+                    callback_data=f"menu:opportunity-history:{page}",
                 )
             ],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:home")],
@@ -490,9 +510,14 @@ def _offer_details(ad: P2PAd) -> str:
     )
     ad_number = escape(ad.number or ad.id)
     offer_url = escape(_walt_offer_url(ad), quote=True)
+    rating_line = (
+        f"\n   Рейтинг: {_percent_text(ad.rating).replace('.', ',')}"
+        if ad.rating is not None
+        else ""
+    )
     return (
         f"   {nickname} · {_money(ad.min_amount)}–{_money(ad.max_amount)} ₽\n"
-        f"   {payments or 'способ оплаты не указан'}\n"
+        f"   {payments or 'способ оплаты не указан'}{rating_line}\n"
         f'   🔗 <a href="{offer_url}">Открыть объявление</a> · Объявление №{ad_number}'
     )
 

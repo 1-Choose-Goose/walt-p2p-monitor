@@ -209,10 +209,10 @@ def test_opportunity_history_buttons_open_entry_and_return_to_notifications() ->
         for button in row
     ]
 
-    assert history_buttons[0].callback_data == "opportunity-history:open:17"
+    assert history_buttons[0].callback_data == "opportunity-history:open:17:0"
     assert "Покупка USDT" in history_buttons[0].text
     assert history_buttons[-1].callback_data == "menu:notifications"
-    assert detail_buttons[0].callback_data == "menu:opportunity-history"
+    assert detail_buttons[0].callback_data == "menu:opportunity-history:0"
 
 
 def test_asset_keyboard_uses_current_walt_p2p_tickers() -> None:

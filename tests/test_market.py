@@ -2,7 +2,13 @@ from decimal import Decimal
 
 import pytest
 
-from walt_price_bot.market import MarketUnavailable, select_best_buy_offer, select_best_sell_offer
+from walt_price_bot.market import (
+    MarketUnavailable,
+    select_best_buy_offer,
+    select_best_sell_offer,
+    select_buy_offers,
+    select_sell_offers,
+)
 from walt_price_bot.models import Asset, P2PAd, QuoteSide
 
 
@@ -73,6 +79,38 @@ def test_sell_offer_is_highest_online_buy_ad() -> None:
     offers = [ad("low", QuoteSide.BUY, "88.00"), ad("best", QuoteSide.BUY, "90.10")]
 
     assert select_best_sell_offer(offers).id == "best"
+
+
+def test_buy_candidates_include_every_eligible_unique_ad_in_price_order() -> None:
+    offers = [
+        ad("middle", QuoteSide.SELL, "89.00"),
+        ad("offline", QuoteSide.SELL, "70.00", online=False),
+        ad("best", QuoteSide.SELL, "80.00"),
+        ad("middle", QuoteSide.SELL, "89.00"),
+        ad("wrong-side", QuoteSide.BUY, "95.00"),
+        ad("last", QuoteSide.SELL, "91.00"),
+    ]
+
+    assert [offer.id for offer in select_buy_offers(offers)] == [
+        "best",
+        "middle",
+        "last",
+    ]
+
+
+def test_sell_candidates_include_every_eligible_unique_ad_in_price_order() -> None:
+    offers = [
+        ad("low", QuoteSide.BUY, "88.00"),
+        ad("best", QuoteSide.BUY, "92.00"),
+        ad("middle", QuoteSide.BUY, "90.00"),
+        ad("best", QuoteSide.BUY, "92.00"),
+    ]
+
+    assert [offer.id for offer in select_sell_offers(offers)] == [
+        "best",
+        "middle",
+        "low",
+    ]
 
 
 def test_sell_offer_requires_minimum_limit_between_500_and_2000_rubles() -> None:

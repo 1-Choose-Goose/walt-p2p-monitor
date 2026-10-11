@@ -159,6 +159,11 @@ from walt_price_bot.config import Settings
 Settings(_env_file=Path(sys.argv[1]))
 PY
 
+if [[ ${was_active} == true ]]; then
+  systemctl stop walt-price-bot.service
+fi
+service_stopped=true
+
 if [[ -f ${database_file} ]]; then
   backup_file=${database_file}.pre-upgrade.${timestamp}
   "${preflight_dir}/.venv/bin/python" -c \
@@ -167,11 +172,6 @@ if [[ -f ${database_file} ]]; then
   chown waltbot:waltbot "${backup_file}"
   chmod 0600 "${backup_file}"
 fi
-
-if [[ ${was_active} == true ]]; then
-  systemctl stop walt-price-bot.service
-fi
-service_stopped=true
 
 if [[ -e ${app_dir} || -L ${app_dir} ]]; then
   previous_release=${app_dir}.previous.${timestamp}
@@ -193,11 +193,44 @@ python3 -m venv "${app_dir}/.venv"
 chown -R root:root "${app_dir}"
 chmod -R u=rwX,go=rX "${app_dir}"
 
+"${app_dir}/.venv/bin/python" - "${database_file}" <<'PY'
+import asyncio
+import sqlite3
+import sys
+from pathlib import Path
+
+from walt_price_bot.repository import Repository
+
+database = Path(sys.argv[1])
+asyncio.run(Repository(database).initialize())
+with sqlite3.connect(database) as connection:
+    if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+        raise RuntimeError("migrated SQLite database is invalid")
+PY
+chown waltbot:waltbot "${database_file}"
+chmod 0600 "${database_file}"
+
 install -m 0644 "${source_dir}/deploy/walt-price-bot.service" "${unit_file}"
 systemctl daemon-reload
 systemctl enable --now walt-price-bot.service
-sleep 2
-systemctl is-active --quiet walt-price-bot.service
+stable_checks=0
+for _ in {1..15}; do
+  if systemctl is-active --quiet walt-price-bot.service \
+    && [[ $(systemctl show -p SubState --value walt-price-bot.service) == running ]]; then
+    stable_checks=$((stable_checks + 1))
+    if [[ ${stable_checks} -ge 5 ]]; then
+      break
+    fi
+  else
+    stable_checks=0
+  fi
+  sleep 1
+done
+if [[ ${stable_checks} -lt 5 ]]; then
+  systemctl status --no-pager walt-price-bot.service >&2 || true
+  journalctl -u walt-price-bot.service -n 50 --no-pager >&2 || true
+  exit 1
+fi
 
 service_stopped=false
 trap - EXIT

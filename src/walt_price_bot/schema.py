@@ -8,7 +8,7 @@ import aiosqlite
 
 from .models import SEED_ASSETS
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 LEGACY_TABLES = (
     "settings",
     "alerts",
@@ -170,14 +170,14 @@ CREATE_STATEMENTS = (
     """,
     """
     CREATE TABLE opportunity_notification_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         telegram_id INTEGER NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
         asset TEXT NOT NULL REFERENCES asset_catalog(symbol),
         quote_side TEXT NOT NULL CHECK (quote_side IN ('BUY', 'SELL')),
         ad_id TEXT NOT NULL,
         notified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         message_text TEXT NOT NULL DEFAULT '',
-        expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',
-        PRIMARY KEY (telegram_id, asset, quote_side, ad_id)
+        expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'
     )
     """,
 )
@@ -388,7 +388,7 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
         row = await (
             await db.execute("SELECT version FROM schema_meta WHERE singleton = 1")
         ).fetchone()
-        if row is None or int(row[0]) not in {2, 3, 4, CURRENT_SCHEMA_VERSION}:
+        if row is None or int(row[0]) not in {2, 3, 4, 5, CURRENT_SCHEMA_VERSION}:
             raise RuntimeError("unsupported database schema version")
         await db.execute("BEGIN IMMEDIATE")
         try:
@@ -417,6 +417,30 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
                     "strftime('%Y-%m-%dT%H:%M:%f+00:00', notified_at, '+10 minutes')"
                 )
                 version = 5
+            if version == 5:
+                await db.execute(
+                    "ALTER TABLE opportunity_notification_history "
+                    "RENAME TO opportunity_notification_history_v5"
+                )
+                history_statement = next(
+                    statement
+                    for statement in CREATE_STATEMENTS
+                    if "CREATE TABLE opportunity_notification_history" in statement
+                )
+                await db.execute(history_statement)
+                await db.execute(
+                    """
+                    INSERT INTO opportunity_notification_history(
+                        id, telegram_id, asset, quote_side, ad_id,
+                        notified_at, message_text, expires_at
+                    )
+                    SELECT rowid, telegram_id, asset, quote_side, ad_id,
+                           notified_at, message_text, expires_at
+                    FROM opportunity_notification_history_v5
+                    """
+                )
+                await db.execute("DROP TABLE opportunity_notification_history_v5")
+                version = 6
             if version != int(row[0]):
                 await db.execute(
                     "UPDATE schema_meta SET version = ? WHERE singleton = 1",

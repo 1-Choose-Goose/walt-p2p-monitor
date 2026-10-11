@@ -74,10 +74,17 @@ def create_v4_database(path: Path) -> None:
         for statement in schema.CREATE_STATEMENTS
         if "CREATE TABLE opportunity_notification_history" in statement
     )
-    v4_history_table = current_history_table.replace(
-        "        message_text TEXT NOT NULL DEFAULT '',\n"
-        "        expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',\n",
-        "",
+    v4_history_table = (
+        current_history_table.replace("        id INTEGER PRIMARY KEY AUTOINCREMENT,\n", "")
+        .replace("        message_text TEXT NOT NULL DEFAULT '',\n", "")
+        .replace(
+            "        expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'\n",
+            "",
+        )
+        .replace(
+            "        notified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    )",
+            "        notified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n    )",
+        )
     )
     with sqlite3.connect(path) as db:
         for statement in schema.CREATE_STATEMENTS:
@@ -115,7 +122,7 @@ async def test_v4_database_adds_expiring_opportunity_history(tmp_path: Path) -> 
     )
 
     with sqlite3.connect(database) as db:
-        assert db.execute("SELECT version FROM schema_meta").fetchone() == (5,)
+        assert db.execute("SELECT version FROM schema_meta").fetchone() == (6,)
         columns = {
             row[1]
             for row in db.execute(
@@ -154,7 +161,7 @@ async def test_v14_migration_is_complete_and_idempotent(tmp_path: Path) -> None:
     assert await repository.list_opportunity_history(ADMIN_TELEGRAM_ID) == []
 
     with sqlite3.connect(database) as db:
-        assert db.execute("SELECT version FROM schema_meta").fetchone() == (5,)
+        assert db.execute("SELECT version FROM schema_meta").fetchone() == (6,)
         assert db.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
         columns = {row[1] for row in db.execute("PRAGMA table_info(user_credentials)")}
         assert "encrypted_token" in columns

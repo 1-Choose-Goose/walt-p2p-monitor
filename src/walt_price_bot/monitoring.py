@@ -155,10 +155,24 @@ async def monitor_multi_user_forever(
     tick_seconds: int = 15,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
+    last_history_cleanup: datetime | None = None
     while True:
         try:
+            now = datetime.now(UTC)
+            if (
+                last_history_cleanup is None
+                or now >= last_history_cleanup + timedelta(minutes=1)
+            ):
+                try:
+                    await repository.prune_opportunity_history(now)
+                except Exception as exc:
+                    logger.warning(
+                        "Opportunity history cleanup failed (%s)",
+                        type(exc).__name__,
+                    )
+                last_history_cleanup = now
             await run_multi_user_cycle(
-                repository, factory, sender, datetime.now(UTC)
+                repository, factory, sender, now
             )
         except asyncio.CancelledError:
             raise

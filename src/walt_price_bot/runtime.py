@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -7,7 +8,7 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from .alerts import evaluate_percent_change, evaluate_threshold
-from .market import MarketUnavailable, select_best_buy_offer, select_best_sell_offer
+from .market import select_buy_offers, select_sell_offers
 from .models import (
     SEED_ASSETS,
     AlertKind,
@@ -111,29 +112,25 @@ class MarketService:
                     type(exchange_price).__name__,
                 )
                 exchange_price = None
-            try:
-                buy = (
-                    select_best_buy_offer(sell_ads, filters)
-                    if QuoteSide.BUY in filters.directions
-                    else None
-                )
-            except MarketUnavailable:
-                buy = None
-            try:
-                sell = (
-                    select_best_sell_offer(buy_ads, filters)
-                    if QuoteSide.SELL in filters.directions
-                    else None
-                )
-            except MarketUnavailable:
-                sell = None
+            buy_offers = (
+                select_buy_offers(sell_ads, filters)
+                if QuoteSide.BUY in filters.directions
+                else ()
+            )
+            sell_offers = (
+                select_sell_offers(buy_ads, filters)
+                if QuoteSide.SELL in filters.directions
+                else ()
+            )
             return MarketSnapshot(
                 asset=entry.symbol,
-                buy=buy,
-                sell=sell,
+                buy=buy_offers[0] if buy_offers else None,
+                sell=sell_offers[0] if sell_offers else None,
                 exchange_price=exchange_price,
                 buy_source_available=buy_source_available,
                 sell_source_available=sell_source_available,
+                buy_offers=buy_offers,
+                sell_offers=sell_offers,
             )
 
         snapshots = await asyncio.gather(*(fetch(asset) for asset in assets))
@@ -162,8 +159,27 @@ async def run_monitor_cycle(
     telegram_id: int | None = None,
     schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
 ) -> None:
-    telegram_id = telegram_id or await repository.get_owner_id()
-    await repository.prune_opportunity_history(now)
+    resolved_id = telegram_id or await repository.get_owner_id()
+    async with repository.opportunity_lock(resolved_id):
+        await _run_monitor_cycle_locked(
+            repository,
+            provider,
+            sender,
+            now,
+            telegram_id=resolved_id,
+            schedule_timezone=schedule_timezone,
+        )
+
+
+async def _run_monitor_cycle_locked(
+    repository: Repository,
+    provider: SnapshotProvider,
+    sender: MessageSender,
+    now: datetime,
+    *,
+    telegram_id: int,
+    schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
+) -> None:
     if await repository.is_paused(telegram_id):
         return
     preferences = await repository.get_preferences(telegram_id)
@@ -189,6 +205,12 @@ async def run_monitor_cycle(
         if snapshot.asset in selected and _snapshot_is_fresh(snapshot, now)
     ]
     by_asset = {snapshot.asset: snapshot for snapshot in snapshots}
+    message_sections: list[str] = []
+    pending_alert_disarms: list[int] = []
+    pending_alert_baselines: list[tuple[int, str]] = []
+    pending_opportunities: list[tuple[Asset, QuoteSide, str, str]] = []
+    pending_schedule_ids: list[int] = []
+    pending_interval_summary = False
 
     for rule in await repository.list_alerts(telegram_id, enabled_only=True):
         snapshot = by_asset.get(rule.asset)
@@ -203,12 +225,8 @@ async def run_monitor_cycle(
                 evaluation = evaluate_threshold(rule, price)
                 if evaluation.notify:
                     if preferences.notifications.threshold:
-                        await sender.send_message(
-                            telegram_id, _threshold_message(rule, offer)
-                        )
-                        await repository.update_alert_state(
-                            telegram_id, rule.id, armed=False
-                        )
+                        message_sections.append(_threshold_message(rule, offer))
+                        pending_alert_disarms.append(rule.id)
                 elif evaluation.armed != rule.armed:
                     await repository.update_alert_state(
                         telegram_id, rule.id, armed=evaluation.armed
@@ -216,17 +234,16 @@ async def run_monitor_cycle(
             else:
                 evaluation = evaluate_percent_change(rule, price)
                 if evaluation.notify and preferences.notifications.percent:
-                    await sender.send_message(
-                        telegram_id,
+                    message_sections.append(
                         _percent_message(
                             rule.asset,
                             rule.quote_side,
                             offer,
                             evaluation.change_percent,
-                        ),
+                        )
                     )
-                    await repository.update_alert_state(
-                        telegram_id, rule.id, baseline=str(evaluation.next_baseline)
+                    pending_alert_baselines.append(
+                        (rule.id, str(evaluation.next_baseline))
                     )
                 elif rule.baseline is None and evaluation.next_baseline is not None:
                     await repository.update_alert_state(
@@ -237,19 +254,21 @@ async def run_monitor_cycle(
 
     opportunity_settings = await repository.get_opportunity_settings(telegram_id)
     if opportunity_settings.enabled and preferences.notifications.opportunity:
-        async with repository.opportunity_lock(telegram_id):
-            opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
-            for snapshot in snapshots:
-                if snapshot.exchange_price is None:
+        opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]] = []
+        recent_keys = await repository.get_recent_opportunity_keys(telegram_id, now)
+        for snapshot in snapshots:
+            if snapshot.exchange_price is None:
+                continue
+            for side, offers in (
+                (QuoteSide.BUY, snapshot.buy_offers or ((snapshot.buy,) if snapshot.buy else ())),
+                (
+                    QuoteSide.SELL,
+                    snapshot.sell_offers or ((snapshot.sell,) if snapshot.sell else ()),
+                ),
+            ):
+                if not mode_includes_side(opportunity_settings.mode, side):
                     continue
-                for side, offer in (
-                    (QuoteSide.BUY, snapshot.buy),
-                    (QuoteSide.SELL, snapshot.sell),
-                ):
-                    if offer is None or not mode_includes_side(
-                        opportunity_settings.mode, side
-                    ):
-                        continue
+                for offer in offers:
                     spread = opportunity_percent(
                         side,
                         p2p_price=offer.price,
@@ -264,64 +283,48 @@ async def run_monitor_cycle(
                         ),
                     ):
                         continue
-                    if await repository.was_opportunity_notified(
-                        telegram_id, snapshot.asset, side, offer.id, now
-                    ):
+                    if (snapshot.asset, side, offer.id) in recent_keys:
                         continue
                     opportunities.append((snapshot, side, offer, spread))
-            if opportunities:
-                try:
-                    opportunity_messages = [
-                        _opportunity_message(
-                            snapshot,
-                            side,
-                            offer,
-                            spread,
-                            opportunity_settings.min_spread_percent,
-                            opportunity_settings.max_buy_premium_percent,
-                        )
-                        for snapshot, side, offer, spread in opportunities
-                    ]
-                    await sender.send_message(
-                        telegram_id,
-                        "\n\n".join(opportunity_messages),
-                    )
-                    await repository.mark_opportunities_notified(
-                        telegram_id,
-                        [
-                            (snapshot.asset, side, offer.id, message_text)
-                            for (snapshot, side, offer, _), message_text in zip(
-                                opportunities, opportunity_messages, strict=True
-                            )
-                        ],
-                        now,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to deliver opportunity summary (%s)",
-                        type(exc).__name__,
-                    )
+        if opportunities:
+            opportunity_messages = [
+                _opportunity_message(
+                    snapshot,
+                    side,
+                    offer,
+                    spread,
+                    opportunity_settings.min_spread_percent,
+                    opportunity_settings.max_buy_premium_percent,
+                )
+                for snapshot, side, offer, spread in opportunities
+            ]
+            message_sections.append(
+                _opportunity_digest(opportunities, opportunity_messages)
+            )
+            pending_opportunities.extend(
+                (snapshot.asset, side, offer.id, message_text)
+                for (snapshot, side, offer, _), message_text in zip(
+                    opportunities, opportunity_messages, strict=True
+                )
+            )
 
+    scheduled_summary_needed = False
     for schedule in await repository.list_schedules(telegram_id, enabled_only=True):
         if preferences.summary_enabled or not preferences.notifications.scheduled:
             break
         if not schedule_is_due(schedule, now, timezone=schedule_timezone):
             continue
-        try:
-            await sender.send_message(
-                telegram_id,
-                format_market_summary(
-                    snapshots,
-                    tuple(entry.symbol for entry in assets),
-                    preferences.directions,
-                    show_exchange_rate=preferences.show_exchange_rate,
-                ),
+        scheduled_summary_needed = True
+        pending_schedule_ids.append(schedule.id)
+    if scheduled_summary_needed:
+        message_sections.append(
+            format_market_summary(
+                snapshots,
+                tuple(entry.symbol for entry in assets),
+                preferences.directions,
+                show_exchange_rate=preferences.show_exchange_rate,
             )
-            await repository.mark_schedule_sent(
-                telegram_id, schedule.id, now.astimezone(UTC).isoformat()
-            )
-        except Exception as exc:
-            logger.warning("Failed to deliver schedule %s (%s)", schedule.id, type(exc).__name__)
+        )
 
     if preferences.summary_enabled and preferences.notifications.scheduled:
         from .monitoring import interval_summary_is_due
@@ -330,23 +333,37 @@ async def run_monitor_cycle(
         if interval_summary_is_due(
             last_summary, now, preferences.summary_interval_minutes
         ):
-            try:
-                await sender.send_message(
-                    telegram_id,
-                    format_market_summary(
-                        snapshots,
-                        tuple(entry.symbol for entry in assets),
-                        preferences.directions,
-                        show_exchange_rate=preferences.show_exchange_rate,
-                    ),
+            message_sections.append(
+                format_market_summary(
+                    snapshots,
+                    tuple(entry.symbol for entry in assets),
+                    preferences.directions,
+                    show_exchange_rate=preferences.show_exchange_rate,
                 )
-                await repository.mark_summary_sent(
-                    telegram_id, now.astimezone(UTC).isoformat()
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to deliver interval summary (%s)", type(exc).__name__
-                )
+            )
+            pending_interval_summary = True
+
+    if not message_sections:
+        return
+    try:
+        await sender.send_message(telegram_id, _delivery_text(message_sections))
+    except Exception as exc:
+        logger.warning("Failed to deliver monitoring events (%s)", type(exc).__name__)
+        return
+
+    for alert_id in pending_alert_disarms:
+        await repository.update_alert_state(telegram_id, alert_id, armed=False)
+    for alert_id, baseline in pending_alert_baselines:
+        await repository.update_alert_state(telegram_id, alert_id, baseline=baseline)
+    if pending_opportunities:
+        await repository.mark_opportunities_notified(
+            telegram_id, pending_opportunities, now
+        )
+    sent_at = now.astimezone(UTC).isoformat()
+    for schedule_id in pending_schedule_ids:
+        await repository.mark_schedule_sent(telegram_id, schedule_id, sent_at)
+    if pending_interval_summary:
+        await repository.mark_summary_sent(telegram_id, sent_at)
 
 
 async def monitor_forever(
@@ -358,13 +375,27 @@ async def monitor_forever(
     schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
+    last_history_cleanup: datetime | None = None
     while True:
         try:
+            now = datetime.now(UTC)
+            if (
+                last_history_cleanup is None
+                or now >= last_history_cleanup + timedelta(minutes=1)
+            ):
+                try:
+                    await repository.prune_opportunity_history(now)
+                except Exception as exc:
+                    logger.warning(
+                        "Opportunity history cleanup failed (%s)",
+                        type(exc).__name__,
+                    )
+                last_history_cleanup = now
             await run_monitor_cycle(
                 repository,
                 provider,
                 sender,
-                datetime.now(UTC),
+                now,
                 schedule_timezone=schedule_timezone,
             )
         except asyncio.CancelledError:
@@ -399,6 +430,43 @@ def _percent_message(
         f"Текущая цена {action}: {offer.price} ₽\n"
         f"{_offer_details(offer)}"
     )
+
+
+def _opportunity_digest(
+    opportunities: list[tuple[MarketSnapshot, QuoteSide, P2PAd, Decimal]],
+    messages: list[str],
+) -> str:
+    grouped: dict[tuple[Asset, QuoteSide], list[str]] = {}
+    for (snapshot, side, _, _), message in zip(
+        opportunities, messages, strict=True
+    ):
+        grouped.setdefault((snapshot.asset, side), []).append(message)
+    sections: list[str] = []
+    visible_count = 0
+    for group_messages in grouped.values():
+        for message in group_messages[:5]:
+            candidate = "\n\n".join([*sections, message])
+            if len(candidate) > 2400:
+                break
+            sections.append(message)
+            visible_count += 1
+    hidden = len(messages) - visible_count
+    if hidden > 0:
+        sections.append(f"Ещё предложений в истории: {hidden}")
+    return "\n\n".join(sections)
+
+
+def _delivery_text(sections: list[str]) -> str:
+    full = "\n\n".join(sections)
+    if len(full) <= 4000:
+        return full
+    headlines = [re.sub(r"<[^>]+>", "", section.splitlines()[0]) for section in sections]
+    compact = (
+        "🔔 <b>Новые события мониторинга</b>\n"
+        + "\n".join(f"• {headline}" for headline in headlines)
+        + "\n\nПодробности выгодных лотов доступны в истории в течение 10 минут."
+    )
+    return compact[:4000]
 
 
 def _opportunity_message(

@@ -795,10 +795,6 @@ class Repository:
                 "DELETE FROM opportunity_notifications WHERE telegram_id = ?",
                 (telegram_id,),
             )
-            await db.execute(
-                "DELETE FROM opportunity_notification_history WHERE telegram_id = ?",
-                (telegram_id,),
-            )
             await db.commit()
 
     async def disable_opportunities(self, telegram_id: int) -> None:
@@ -832,20 +828,33 @@ class Repository:
     ) -> bool:
         timestamp = (now or datetime.now(UTC)).astimezone(UTC)
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
-            await db.execute(
-                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
-                (timestamp.isoformat(),),
-            )
             row = await (
                 await db.execute(
                     "SELECT 1 FROM opportunity_notification_history "
-                    "WHERE telegram_id = ? AND asset = ? AND quote_side = ? AND ad_id = ?",
-                    (telegram_id, asset.value, side.value, ad_id),
+                    "WHERE telegram_id = ? AND asset = ? AND quote_side = ? "
+                    "AND ad_id = ? AND expires_at > ?",
+                    (telegram_id, asset.value, side.value, ad_id, timestamp.isoformat()),
                 )
             ).fetchone()
-            await db.commit()
         return row is not None
+
+    async def get_recent_opportunity_keys(
+        self, telegram_id: int, now: datetime | None = None
+    ) -> set[tuple[Asset, QuoteSide, str]]:
+        timestamp = (now or datetime.now(UTC)).astimezone(UTC)
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT asset, quote_side, ad_id "
+                    "FROM opportunity_notification_history "
+                    "WHERE telegram_id = ? AND expires_at > ?",
+                    (telegram_id, timestamp.isoformat()),
+                )
+            ).fetchall()
+        return {
+            (Asset(str(row["asset"])), QuoteSide(str(row["quote_side"])), str(row["ad_id"]))
+            for row in rows
+        }
 
     async def mark_opportunity_notified(
         self, telegram_id: int, asset: Asset, side: QuoteSide, ad_id: str
@@ -868,19 +877,11 @@ class Repository:
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
             await db.execute(
-                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
-                (timestamp.isoformat(),),
-            )
-            await db.execute(
                 """
                 INSERT INTO opportunity_notification_history(
                     telegram_id, asset, quote_side, ad_id,
                     notified_at, message_text, expires_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(telegram_id, asset, quote_side, ad_id) DO UPDATE SET
-                    notified_at = excluded.notified_at,
-                    message_text = excluded.message_text,
-                    expires_at = excluded.expires_at
                 """,
                 (
                     telegram_id,
@@ -905,52 +906,63 @@ class Repository:
             return max(cursor.rowcount, 0)
 
     async def list_opportunity_history(
-        self, telegram_id: int, now: datetime | None = None
+        self,
+        telegram_id: int,
+        now: datetime | None = None,
+        *,
+        limit: int = 15,
+        offset: int = 0,
     ) -> list[OpportunityHistoryEntry]:
+        if limit < 1 or limit > 100 or offset < 0:
+            raise ValueError("invalid pagination")
         timestamp = (now or datetime.now(UTC)).astimezone(UTC)
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
-            await db.execute(
-                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
-                (timestamp.isoformat(),),
-            )
             rows = await (
                 await db.execute(
                     """
-                    SELECT rowid AS id, asset, quote_side, ad_id,
+                    SELECT id, asset, quote_side, ad_id,
                            message_text, notified_at, expires_at
                     FROM opportunity_notification_history
-                    WHERE telegram_id = ? AND message_text <> ''
-                    ORDER BY notified_at DESC, rowid DESC
+                    WHERE telegram_id = ? AND message_text <> '' AND expires_at > ?
+                    ORDER BY notified_at DESC, id DESC
+                    LIMIT ? OFFSET ?
                     """,
-                    (telegram_id,),
+                    (telegram_id, timestamp.isoformat(), limit, offset),
                 )
             ).fetchall()
-            await db.commit()
         return [self._opportunity_history_from_row(row) for row in rows]
+
+    async def count_opportunity_history(
+        self, telegram_id: int, now: datetime | None = None
+    ) -> int:
+        timestamp = (now or datetime.now(UTC)).astimezone(UTC)
+        async with self._connect() as db:
+            return int(
+                await self._scalar(
+                    db,
+                    "SELECT COUNT(*) FROM opportunity_notification_history "
+                    "WHERE telegram_id = ? AND message_text <> '' AND expires_at > ?",
+                    (telegram_id, timestamp.isoformat()),
+                )
+            )
 
     async def get_opportunity_history_entry(
         self, telegram_id: int, entry_id: int, now: datetime | None = None
     ) -> OpportunityHistoryEntry | None:
         timestamp = (now or datetime.now(UTC)).astimezone(UTC)
         async with self._connect() as db:
-            await db.execute("BEGIN IMMEDIATE")
-            await db.execute(
-                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
-                (timestamp.isoformat(),),
-            )
             row = await (
                 await db.execute(
                     """
-                    SELECT rowid AS id, asset, quote_side, ad_id,
+                    SELECT id, asset, quote_side, ad_id,
                            message_text, notified_at, expires_at
                     FROM opportunity_notification_history
-                    WHERE telegram_id = ? AND rowid = ? AND message_text <> ''
+                    WHERE telegram_id = ? AND id = ? AND message_text <> ''
+                      AND expires_at > ?
                     """,
-                    (telegram_id, entry_id),
+                    (telegram_id, entry_id, timestamp.isoformat()),
                 )
             ).fetchone()
-            await db.commit()
         return self._opportunity_history_from_row(row) if row else None
 
     async def mark_opportunities_notified(
@@ -965,20 +977,12 @@ class Repository:
         expires_at = timestamp + OPPORTUNITY_HISTORY_TTL
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
-            await db.execute(
-                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
-                (timestamp.isoformat(),),
-            )
             await db.executemany(
                 """
                 INSERT INTO opportunity_notification_history(
                     telegram_id, asset, quote_side, ad_id,
                     notified_at, message_text, expires_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(telegram_id, asset, quote_side, ad_id) DO UPDATE SET
-                    notified_at = excluded.notified_at,
-                    message_text = excluded.message_text,
-                    expires_at = excluded.expires_at
                 """,
                 [
                     (

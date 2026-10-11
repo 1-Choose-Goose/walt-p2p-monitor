@@ -30,19 +30,26 @@ class MarketUnavailable(RuntimeError):
 def select_best_buy_offer(
     ads: Iterable[P2PAd], filters: MarketFilters | None = None
 ) -> P2PAd:
+    eligible = select_buy_offers(ads, filters)
+    if not eligible:
+        raise MarketUnavailable("no online sell offers")
+    return eligible[0]
+
+
+def select_buy_offers(
+    ads: Iterable[P2PAd], filters: MarketFilters | None = None
+) -> tuple[P2PAd, ...]:
     filters = filters or MarketFilters()
-    eligible = [
-        ad
+    eligible = {
+        ad.id: ad
         for ad in ads
         if ad.is_online
         and ad.side is QuoteSide.SELL
         and _has_valid_values(ad)
         and _matches_limits(ad, filters)
         and _supports_payments(ad, filters.buy_payments)
-    ]
-    if not eligible:
-        raise MarketUnavailable("no online sell offers")
-    return min(eligible, key=lambda ad: ad.price)
+    }
+    return tuple(sorted(eligible.values(), key=lambda ad: ad.price))
 
 
 def _supports_allowed_purchase_payment(ad: P2PAd) -> bool:
@@ -88,16 +95,25 @@ def _has_valid_values(ad: P2PAd) -> bool:
 def select_best_sell_offer(
     ads: Iterable[P2PAd], filters: MarketFilters | None = None
 ) -> P2PAd:
+    eligible = select_sell_offers(ads, filters)
+    if not eligible:
+        raise MarketUnavailable("no online buy offers")
+    return eligible[0]
+
+
+def select_sell_offers(
+    ads: Iterable[P2PAd], filters: MarketFilters | None = None
+) -> tuple[P2PAd, ...]:
     filters = filters or MarketFilters()
-    eligible = [
-        ad
+    eligible = {
+        ad.id: ad
         for ad in ads
         if ad.is_online
         and ad.side is QuoteSide.BUY
         and _has_valid_values(ad)
         and _matches_limits(ad, filters)
         and _supports_payments(ad, filters.sell_payments)
-    ]
-    if not eligible:
-        raise MarketUnavailable("no online buy offers")
-    return max(eligible, key=lambda ad: ad.price)
+    }
+    return tuple(
+        sorted(eligible.values(), key=lambda ad: ad.price, reverse=True)
+    )
