@@ -138,25 +138,36 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         ]
         return asset_keyboard(prefix, entries)
 
+    async def user_main_menu(telegram_id: int):
+        account = await repository.get_user(telegram_id)
+        if account is None:
+            raise ValueError("unknown user")
+        return main_menu_keyboard(
+            account.role,
+            await repository.is_paused(telegram_id),
+        )
+
     @router.message(F.text == MAIN_MENU_BUTTON)
     async def main_menu_button(message: Message, state: FSMContext) -> None:
         if not await owner_required(message, repository):
             return
         await state.clear()
-        account = await repository.get_user(message.from_user.id)
         await replace_message(
             message,
             repository,
             WELCOME,
-            reply_markup=main_menu_keyboard(
-                account.role, await repository.is_paused(message.from_user.id)
-            ),
+            reply_markup=await user_main_menu(message.from_user.id),
         )
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
         if await owner_required(message, repository):
-            await replace_message(message, repository, HELP, reply_markup=main_menu_keyboard())
+            await replace_message(
+                message,
+                repository,
+                HELP,
+                reply_markup=await user_main_menu(message.from_user.id),
+            )
 
     @router.message(F.text == PRICES_BUTTON)
     @router.message(Command("price"))
@@ -170,7 +181,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 message,
                 repository,
                 "⚠️ Не удалось получить цены Walt. Повторите немного позже.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=await user_main_menu(message.from_user.id),
             )
             return
         preferences = await repository.get_preferences(message.from_user.id)
@@ -183,7 +194,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 preferences.directions,
                 show_exchange_rate=preferences.show_exchange_rate,
             ),
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await user_main_menu(message.from_user.id),
         )
 
     @router.message(F.text == NOTIFICATIONS_BUTTON)
@@ -209,7 +220,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                     await repository.list_schedules(message.from_user.id),
                     await repository.get_opportunity_settings(message.from_user.id),
                 ),
-                reply_markup=main_menu_keyboard(),
+                reply_markup=await user_main_menu(message.from_user.id),
             )
 
     @router.message(Command("deals"))
@@ -233,7 +244,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 message,
                 repository,
                 "⏸ Уведомления приостановлены.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=await user_main_menu(message.from_user.id),
             )
 
     @router.message(Command("resume"))
@@ -244,7 +255,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 message,
                 repository,
                 "▶️ Уведомления возобновлены.",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=await user_main_menu(message.from_user.id),
             )
 
     @router.message(Command("alert"))
@@ -316,7 +327,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             message,
             repository,
             f"✅ Ценовое уведомление A{alert_id} создано.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await user_main_menu(message.from_user.id),
         )
 
     @router.message(Command("change"))
@@ -403,7 +414,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             message,
             repository,
             f"✅ Процентное уведомление A{alert_id} создано.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await user_main_menu(message.from_user.id),
         )
 
     @router.message(Command("schedule"))
@@ -466,7 +477,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             message,
             repository,
             f"✅ Расписание S{schedule_id} создано.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await user_main_menu(message.from_user.id),
         )
 
     @router.message(Command("delete"))
@@ -498,7 +509,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         await update_callback(
             callback,
             "✅ Правило удалено." if deleted else "Правило уже удалено.",
-            main_menu_keyboard(),
+            await user_main_menu(callback.from_user.id),
         )
 
     @router.callback_query(F.data == "menu:price")
@@ -516,13 +527,17 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
             )
         except Exception:
             text = "⚠️ Не удалось получить цены Walt. Повторите немного позже."
-        await update_callback(callback, text, main_menu_keyboard())
+        await update_callback(
+            callback, text, await user_main_menu(callback.from_user.id)
+        )
 
     @router.callback_query(F.data == "menu:home")
     async def menu_home(callback: CallbackQuery, state: FSMContext) -> None:
         if await owner_required(callback, repository):
             await state.clear()
-            await update_callback(callback, WELCOME, main_menu_keyboard())
+            await update_callback(
+                callback, WELCOME, await user_main_menu(callback.from_user.id)
+            )
 
     @router.callback_query(F.data == "menu:notifications")
     async def menu_notifications(callback: CallbackQuery) -> None:
@@ -818,7 +833,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         await update_callback(
             callback,
             "⛔ Автоуведомления о выгодных лотах отключены.",
-            main_menu_keyboard(),
+            await user_main_menu(callback.from_user.id),
         )
 
     @router.callback_query(F.data == "menu:alert")
@@ -863,7 +878,7 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                     await repository.list_schedules(callback.from_user.id),
                     await repository.get_opportunity_settings(callback.from_user.id),
                 ),
-                main_menu_keyboard(),
+                await user_main_menu(callback.from_user.id),
             )
 
     @router.callback_query(F.data == "menu:delete")
@@ -874,7 +889,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         schedules = await repository.list_schedules(callback.from_user.id)
         if not alerts and not schedules:
             await update_callback(
-                callback, "Удалять нечего — активных правил нет.", main_menu_keyboard()
+                callback,
+                "Удалять нечего — активных правил нет.",
+                await user_main_menu(callback.from_user.id),
             )
             return
         await update_callback(callback, "Выберите правило:", delete_keyboard(alerts, schedules))
@@ -884,7 +901,9 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if await owner_required(callback, repository):
             await repository.set_paused(callback.from_user.id, True)
             await update_callback(
-                callback, "⏸ Уведомления приостановлены.", main_menu_keyboard()
+                callback,
+                "⏸ Уведомления приостановлены.",
+                await user_main_menu(callback.from_user.id),
             )
 
     @router.callback_query(F.data == "menu:resume")
@@ -892,13 +911,17 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
         if await owner_required(callback, repository):
             await repository.set_paused(callback.from_user.id, False)
             await update_callback(
-                callback, "▶️ Уведомления возобновлены.", main_menu_keyboard()
+                callback,
+                "▶️ Уведомления возобновлены.",
+                await user_main_menu(callback.from_user.id),
             )
 
     @router.callback_query(F.data == "menu:help")
     async def menu_help(callback: CallbackQuery) -> None:
         if await owner_required(callback, repository):
-            await update_callback(callback, HELP, main_menu_keyboard())
+            await update_callback(
+                callback, HELP, await user_main_menu(callback.from_user.id)
+            )
 
     return router
 

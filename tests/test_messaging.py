@@ -55,7 +55,7 @@ def test_telegram_link_previews_are_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_notifications_replace_summary_and_keep_main_menu(
+async def test_background_notifications_replace_summary_with_notifying_message_and_menu(
     tmp_path: Path,
 ) -> None:
     repository = Repository(tmp_path / "bot.db")
@@ -71,13 +71,13 @@ async def test_background_notifications_replace_summary_and_keep_main_menu(
     assert callable(factory)
     await factory(bot, repository).send_message(ADMIN_TELEGRAM_ID, "Выгодный лот")
 
-    bot.edit_message_text.assert_awaited_once()
-    bot.delete_message.assert_not_awaited()
-    bot.send_message.assert_not_awaited()
-    markup = bot.edit_message_text.await_args.kwargs["reply_markup"]
+    bot.edit_message_text.assert_not_awaited()
+    bot.delete_message.assert_awaited_once_with(ADMIN_TELEGRAM_ID, 30)
+    bot.send_message.assert_awaited_once()
+    markup = bot.send_message.await_args.kwargs["reply_markup"]
     assert isinstance(markup, InlineKeyboardMarkup)
     assert any(button.text == "👥 Пользователи" for row in markup.inline_keyboard for button in row)
-    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 30
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 31
 
 
 @pytest.mark.asyncio

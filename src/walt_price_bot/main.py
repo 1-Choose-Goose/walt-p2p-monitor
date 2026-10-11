@@ -51,7 +51,6 @@ def build_message_sender(bot: Any, repository: Repository) -> ReplacingSender:
         bot,
         repository,
         reply_markup_factory=notification_menu,
-        edit_existing=True,
     )
 
 

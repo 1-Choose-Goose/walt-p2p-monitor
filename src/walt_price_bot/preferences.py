@@ -346,10 +346,21 @@ def time_picker_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def return_to_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
+async def return_to_main_menu(
+    callback: CallbackQuery, state: FSMContext, repository: Repository
+) -> None:
     await state.clear()
     if callback.message:
-        await callback.message.edit_text(WELCOME, reply_markup=main_menu_keyboard())
+        account = await repository.get_user(callback.from_user.id)
+        if account is None:
+            raise ValueError("unknown user")
+        await callback.message.edit_text(
+            WELCOME,
+            reply_markup=main_menu_keyboard(
+                account.role,
+                await repository.is_paused(callback.from_user.id),
+            ),
+        )
     await callback.answer()
 
 
@@ -771,7 +782,7 @@ def build_preferences_router(repository: Repository) -> Router:
             await repository.reset_preferences(telegram_id)
             await show_settings(callback)
         elif action is SettingsAction.HOME:
-            await return_to_main_menu(callback, state)
+            await return_to_main_menu(callback, state, repository)
         elif action is SettingsAction.LIMIT and not callback_data.value and callback.message:
             await callback.message.edit_text(
                 "💵 <b>Допустимый минимальный лимит объявления</b>",
@@ -826,11 +837,17 @@ def build_preferences_router(repository: Repository) -> Router:
             return
         await state.clear()
         await message.delete()
+        account = await repository.get_user(message.from_user.id)
+        if account is None:
+            raise ValueError("unknown user")
         await replace_message(
             message,
             repository,
             "✅ Лимит сохранён.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=main_menu_keyboard(
+                account.role,
+                await repository.is_paused(message.from_user.id),
+            ),
         )
 
     return router

@@ -13,6 +13,7 @@ from walt_price_bot.models import (
     QuoteSide,
     ScheduleKind,
     ThresholdDirection,
+    UserRole,
 )
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
 
@@ -28,6 +29,24 @@ async def test_owner_is_fixed_administrator(tmp_path: Path) -> None:
     )
 
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_initialize_repairs_fixed_administrator_role(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    repository = Repository(path)
+    await repository.initialize()
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "UPDATE users SET role = 'USER' WHERE telegram_id = ?",
+            (ADMIN_TELEGRAM_ID,),
+        )
+
+    await repository.initialize()
+
+    administrator = await repository.get_user(ADMIN_TELEGRAM_ID)
+    assert administrator is not None
+    assert administrator.role is UserRole.ADMIN
     assert await repository.get_owner_id() == ADMIN_TELEGRAM_ID
 
 

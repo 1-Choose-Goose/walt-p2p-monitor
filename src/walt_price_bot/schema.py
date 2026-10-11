@@ -449,8 +449,11 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
             await _seed_assets(db)
             await db.execute(
                 """
-                INSERT OR IGNORE INTO users(telegram_id, role, status)
+                INSERT INTO users(telegram_id, role, status)
                 VALUES (?, 'ADMIN', 'ACTIVE')
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    role = 'ADMIN',
+                    status = 'ACTIVE'
                 """,
                 (admin_id,),
             )

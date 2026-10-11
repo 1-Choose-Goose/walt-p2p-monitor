@@ -157,19 +157,23 @@ async def test_notification_categories_show_state_and_return_to_notification_hub
 
 
 @pytest.mark.asyncio
-async def test_settings_home_button_restores_main_menu() -> None:
+async def test_settings_home_button_restores_admin_main_menu(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
     callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         message=SimpleNamespace(edit_text=AsyncMock()),
         answer=AsyncMock(),
     )
     state = SimpleNamespace(clear=AsyncMock())
 
-    await return_to_main_menu(callback, state)
+    await return_to_main_menu(callback, state, repository)
 
     state.clear.assert_awaited_once()
     callback.message.edit_text.assert_awaited_once()
     markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
     assert markup.inline_keyboard[0][0].text == "💱 Текущие цены"
+    assert any(button.text == "👥 Пользователи" for row in markup.inline_keyboard for button in row)
     callback.answer.assert_awaited_once()
 
 
