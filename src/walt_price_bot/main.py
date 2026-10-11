@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+from typing import Any
 
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -16,6 +17,7 @@ from .credentials import CredentialCipher
 from .exchange import CoinbaseRatesClient
 from .fsm_storage import SQLiteFSMStorage
 from .handlers import build_router
+from .keyboards import main_navigation_keyboard
 from .messaging import ReplacingSender
 from .models import SEED_ASSETS
 from .monitoring import UserMarketProviderFactory, monitor_multi_user_forever
@@ -37,6 +39,14 @@ def default_bot_properties() -> DefaultBotProperties:
     return DefaultBotProperties(
         parse_mode=ParseMode.HTML,
         link_preview_is_disabled=True,
+    )
+
+
+def build_message_sender(bot: Any, repository: Repository) -> ReplacingSender:
+    return ReplacingSender(
+        bot,
+        repository,
+        reply_markup=main_navigation_keyboard(),
     )
 
 
@@ -136,7 +146,7 @@ async def run() -> None:
                 monitor_multi_user_forever(
                     repository,
                     factory,
-                    ReplacingSender(bot, repository),
+                    build_message_sender(bot, repository),
                     tick_seconds=min(settings.poll_interval_seconds, 15),
                 ),
                 name="walt-monitor",

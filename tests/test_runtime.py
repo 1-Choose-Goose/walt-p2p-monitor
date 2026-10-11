@@ -376,6 +376,37 @@ async def test_multiple_opportunities_are_delivered_in_one_message(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_opportunities_only_include_assets_selected_by_user(tmp_path: Path) -> None:
+    repository = await prepared_repository(tmp_path / "bot.db")
+    await repository.replace_user_assets(ADMIN_TELEGRAM_ID, (Asset.USDT,))
+    await repository.configure_opportunities(
+        ADMIN_TELEGRAM_ID,
+        mode=OpportunityMode.BUY,
+        min_spread_percent=Decimal("1"),
+    )
+    provider = FakeProvider()
+    provider.snapshots.append(
+        MarketSnapshot(
+            asset=Asset.BTC,
+            buy=ad(Asset.BTC, QuoteSide.SELL, "7000000"),
+            sell=None,
+            exchange_price=Decimal("7100000"),
+        )
+    )
+    sender = FakeSender()
+
+    now = datetime.now(UTC)
+    await run_monitor_cycle(repository, provider, sender, now)
+
+    assert len(sender.messages) == 1
+    assert "USDT" in sender.messages[0][1]
+    assert "BTC" not in sender.messages[0][1]
+    history = await repository.list_opportunity_history(ADMIN_TELEGRAM_ID, now)
+    assert [entry.asset for entry in history] == [Asset.USDT]
+    assert "USDT" in history[0].message_text
+
+
+@pytest.mark.asyncio
 async def test_opportunity_history_prevents_a_b_a_repeat(tmp_path: Path) -> None:
     repository = await prepared_repository(tmp_path / "bot.db")
     await repository.configure_opportunities(

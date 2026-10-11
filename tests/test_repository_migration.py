@@ -68,6 +68,45 @@ def create_v14_database(path: Path) -> None:
         )
 
 
+def create_v4_database(path: Path) -> None:
+    current_history_table = next(
+        statement
+        for statement in schema.CREATE_STATEMENTS
+        if "CREATE TABLE opportunity_notification_history" in statement
+    )
+    v4_history_table = current_history_table.replace(
+        "        message_text TEXT NOT NULL DEFAULT '',\n"
+        "        expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',\n",
+        "",
+    )
+    with sqlite3.connect(path) as db:
+        for statement in schema.CREATE_STATEMENTS:
+            db.execute(
+                v4_history_table if statement == current_history_table else statement
+            )
+        db.execute(
+            "INSERT INTO schema_meta(singleton, version) VALUES (1, 4)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_v4_database_adds_expiring_opportunity_history(tmp_path: Path) -> None:
+    database = tmp_path / "v4.db"
+    create_v4_database(database)
+
+    await Repository(database).initialize()
+
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT version FROM schema_meta").fetchone() == (5,)
+        columns = {
+            row[1]
+            for row in db.execute(
+                "PRAGMA table_info(opportunity_notification_history)"
+            )
+        }
+        assert {"message_text", "expires_at"} <= columns
+
+
 @pytest.mark.asyncio
 async def test_v14_migration_is_complete_and_idempotent(tmp_path: Path) -> None:
     database = tmp_path / "legacy.db"
@@ -83,15 +122,16 @@ async def test_v14_migration_is_complete_and_idempotent(tmp_path: Path) -> None:
     alerts = await repository.list_alerts(ADMIN_TELEGRAM_ID)
     assert [(rule.asset, rule.target) for rule in alerts] == [(Asset.GRAM, "100")]
     assert len(await repository.list_schedules(ADMIN_TELEGRAM_ID)) == 1
-    assert await repository.was_opportunity_notified(
+    assert not await repository.was_opportunity_notified(
         ADMIN_TELEGRAM_ID, Asset.GRAM, QuoteSide.BUY, "offer-1"
     )
-    assert await repository.was_opportunity_notified(
+    assert not await repository.was_opportunity_notified(
         ADMIN_TELEGRAM_ID, Asset.GRAM, QuoteSide.BUY, "offer-2"
     )
+    assert await repository.list_opportunity_history(ADMIN_TELEGRAM_ID) == []
 
     with sqlite3.connect(database) as db:
-        assert db.execute("SELECT version FROM schema_meta").fetchone() == (4,)
+        assert db.execute("SELECT version FROM schema_meta").fetchone() == (5,)
         assert db.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
         columns = {row[1] for row in db.execute("PRAGMA table_info(user_credentials)")}
         assert "encrypted_token" in columns

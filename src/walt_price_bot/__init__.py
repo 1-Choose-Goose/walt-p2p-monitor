@@ -1,3 +1,3 @@
 """Walt P2P Telegram price monitor."""
 
-__version__ = "1.5.6"
+__version__ = "1.6.0"

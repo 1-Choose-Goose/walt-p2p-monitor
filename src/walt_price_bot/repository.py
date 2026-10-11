@@ -3,6 +3,7 @@ import json
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from .models import (
     Asset,
     AssetCatalogEntry,
     NotificationPreferences,
+    OpportunityHistoryEntry,
     OpportunityMode,
     OpportunitySettings,
     QuietHours,
@@ -29,6 +31,7 @@ from .models import (
 )
 
 ADMIN_TELEGRAM_ID = 768929900
+OPPORTUNITY_HISTORY_TTL = timedelta(minutes=10)
 
 
 class DuplicatePhoneError(ValueError):
@@ -759,9 +762,20 @@ class Repository:
         return row[0] if row else None
 
     async def was_opportunity_notified(
-        self, telegram_id: int, asset: Asset, side: QuoteSide, ad_id: str
+        self,
+        telegram_id: int,
+        asset: Asset,
+        side: QuoteSide,
+        ad_id: str,
+        now: datetime | None = None,
     ) -> bool:
+        timestamp = (now or datetime.now(UTC)).astimezone(UTC)
         async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
+                (timestamp.isoformat(),),
+            )
             row = await (
                 await db.execute(
                     "SELECT 1 FROM opportunity_notification_history "
@@ -769,28 +783,153 @@ class Repository:
                     (telegram_id, asset.value, side.value, ad_id),
                 )
             ).fetchone()
+            await db.commit()
         return row is not None
 
     async def mark_opportunity_notified(
         self, telegram_id: int, asset: Asset, side: QuoteSide, ad_id: str
     ) -> None:
-        await self.mark_opportunities_notified(telegram_id, [(asset, side, ad_id)])
+        await self.mark_opportunities_notified(
+            telegram_id, [(asset, side, ad_id, "")]
+        )
+
+    async def save_opportunity_history(
+        self,
+        telegram_id: int,
+        asset: Asset,
+        side: QuoteSide,
+        ad_id: str,
+        message_text: str,
+        notified_at: datetime,
+    ) -> None:
+        timestamp = notified_at.astimezone(UTC)
+        expires_at = timestamp + OPPORTUNITY_HISTORY_TTL
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
+                (timestamp.isoformat(),),
+            )
+            await db.execute(
+                """
+                INSERT INTO opportunity_notification_history(
+                    telegram_id, asset, quote_side, ad_id,
+                    notified_at, message_text, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_id, asset, quote_side, ad_id) DO UPDATE SET
+                    notified_at = excluded.notified_at,
+                    message_text = excluded.message_text,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    telegram_id,
+                    asset.value,
+                    side.value,
+                    ad_id,
+                    timestamp.isoformat(),
+                    message_text,
+                    expires_at.isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def prune_opportunity_history(self, now: datetime | None = None) -> int:
+        timestamp = (now or datetime.now(UTC)).astimezone(UTC)
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
+                (timestamp.isoformat(),),
+            )
+            await db.commit()
+            return max(cursor.rowcount, 0)
+
+    async def list_opportunity_history(
+        self, telegram_id: int, now: datetime | None = None
+    ) -> list[OpportunityHistoryEntry]:
+        timestamp = (now or datetime.now(UTC)).astimezone(UTC)
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
+                (timestamp.isoformat(),),
+            )
+            rows = await (
+                await db.execute(
+                    """
+                    SELECT rowid AS id, asset, quote_side, ad_id,
+                           message_text, notified_at, expires_at
+                    FROM opportunity_notification_history
+                    WHERE telegram_id = ? AND message_text <> ''
+                    ORDER BY notified_at DESC, rowid DESC
+                    """,
+                    (telegram_id,),
+                )
+            ).fetchall()
+            await db.commit()
+        return [self._opportunity_history_from_row(row) for row in rows]
+
+    async def get_opportunity_history_entry(
+        self, telegram_id: int, entry_id: int, now: datetime | None = None
+    ) -> OpportunityHistoryEntry | None:
+        timestamp = (now or datetime.now(UTC)).astimezone(UTC)
+        async with self._connect() as db:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
+                (timestamp.isoformat(),),
+            )
+            row = await (
+                await db.execute(
+                    """
+                    SELECT rowid AS id, asset, quote_side, ad_id,
+                           message_text, notified_at, expires_at
+                    FROM opportunity_notification_history
+                    WHERE telegram_id = ? AND rowid = ? AND message_text <> ''
+                    """,
+                    (telegram_id, entry_id),
+                )
+            ).fetchone()
+            await db.commit()
+        return self._opportunity_history_from_row(row) if row else None
 
     async def mark_opportunities_notified(
         self,
         telegram_id: int,
-        notifications: list[tuple[Asset, QuoteSide, str]],
+        notifications: list[tuple[Asset, QuoteSide, str, str]],
+        notified_at: datetime | None = None,
     ) -> None:
         if not notifications:
             return
+        timestamp = (notified_at or datetime.now(UTC)).astimezone(UTC)
+        expires_at = timestamp + OPPORTUNITY_HISTORY_TTL
         async with self._connect() as db:
             await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "DELETE FROM opportunity_notification_history WHERE expires_at <= ?",
+                (timestamp.isoformat(),),
+            )
             await db.executemany(
-                "INSERT OR IGNORE INTO opportunity_notification_history"
-                "(telegram_id, asset, quote_side, ad_id) VALUES (?, ?, ?, ?)",
+                """
+                INSERT INTO opportunity_notification_history(
+                    telegram_id, asset, quote_side, ad_id,
+                    notified_at, message_text, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_id, asset, quote_side, ad_id) DO UPDATE SET
+                    notified_at = excluded.notified_at,
+                    message_text = excluded.message_text,
+                    expires_at = excluded.expires_at
+                """,
                 [
-                    (telegram_id, asset.value, side.value, ad_id)
-                    for asset, side, ad_id in notifications
+                    (
+                        telegram_id,
+                        asset.value,
+                        side.value,
+                        ad_id,
+                        timestamp.isoformat(),
+                        message_text,
+                        expires_at.isoformat(),
+                    )
+                    for asset, side, ad_id, message_text in notifications
                 ],
             )
             await db.executemany(
@@ -800,7 +939,7 @@ class Repository:
                 "last_ad_id = excluded.last_ad_id",
                 [
                     (telegram_id, asset.value, side.value, ad_id)
-                    for asset, side, ad_id in notifications
+                    for asset, side, ad_id, _ in notifications
                 ],
             )
             await db.commit()
@@ -868,4 +1007,16 @@ class Repository:
             baseline=row["baseline"],
             armed=bool(row["armed"]),
             enabled=bool(row["enabled"]),
+        )
+
+    @staticmethod
+    def _opportunity_history_from_row(row: aiosqlite.Row) -> OpportunityHistoryEntry:
+        return OpportunityHistoryEntry(
+            id=int(row["id"]),
+            asset=Asset(str(row["asset"])),
+            quote_side=QuoteSide(str(row["quote_side"])),
+            ad_id=str(row["ad_id"]),
+            message_text=str(row["message_text"]),
+            notified_at=datetime.fromisoformat(str(row["notified_at"])),
+            expires_at=datetime.fromisoformat(str(row["expires_at"])),
         )

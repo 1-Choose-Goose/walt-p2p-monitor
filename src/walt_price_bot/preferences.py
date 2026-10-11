@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .access import AccessRequirement
 from .keyboards import SETTINGS_BUTTON
-from .messaging import DeleteIncomingMessagesMiddleware
+from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import Asset, QuoteSide, UserPreferences
 from .onboarding import WELCOME
 from .repository import Repository
@@ -736,11 +736,16 @@ def build_preferences_router(repository: Repository) -> Router:
         try:
             value = parse_money(message.text or "")
         except ValueError as exc:
-            await message.answer(str(exc))
+            await replace_message(message, repository, str(exc))
             return
         await repository.update_preferences(message.from_user.id, min_limit_from=value)
         await state.clear()
         await message.delete()
-        await message.answer("✅ Лимит сохранён.")
+        await replace_message(
+            message,
+            repository,
+            "✅ Лимит сохранён.",
+            reply_markup=main_menu_keyboard(),
+        )
 
     return router

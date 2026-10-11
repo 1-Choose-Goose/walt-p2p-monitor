@@ -158,7 +158,14 @@ async def test_token_message_is_deleted_even_when_validation_fails(tmp_path: Pat
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
     cipher = CredentialCipher(SecretStr(Fernet.generate_key().decode()))
-    message = SimpleNamespace(text="bad-token", delete=AsyncMock(), answer=AsyncMock())
+    message = SimpleNamespace(
+        text="bad-token",
+        delete=AsyncMock(),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=51)),
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        bot=SimpleNamespace(delete_message=AsyncMock()),
+    )
     validator = AsyncMock(return_value=TokenValidationResult(TokenValidationStatus.INVALID))
 
     await process_token_message(

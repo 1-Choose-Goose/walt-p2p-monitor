@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -189,6 +190,42 @@ async def test_opportunity_history_persists_all_ads_across_restart(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_visible_opportunity_history_is_deleted_after_ten_minutes(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    created_at = datetime(2026, 10, 11, 3, 0, tzinfo=UTC)
+
+    await repository.save_opportunity_history(
+        ADMIN_TELEGRAM_ID,
+        Asset.USDT,
+        QuoteSide.BUY,
+        "offer-a",
+        "Выгодный лот USDT",
+        created_at,
+    )
+
+    visible = await repository.list_opportunity_history(
+        ADMIN_TELEGRAM_ID, created_at + timedelta(minutes=9, seconds=59)
+    )
+    assert [entry.message_text for entry in visible] == ["Выгодный лот USDT"]
+
+    expired = await repository.list_opportunity_history(
+        ADMIN_TELEGRAM_ID, created_at + timedelta(minutes=10)
+    )
+    assert expired == []
+
+    async with repository._connect() as db:
+        count = await repository._scalar(
+            db,
+            "SELECT COUNT(*) FROM opportunity_notification_history WHERE telegram_id = ?",
+            (ADMIN_TELEGRAM_ID,),
+        )
+    assert count == 0
+
+
+@pytest.mark.asyncio
 async def test_configured_owner_conflict_is_not_silent(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
@@ -254,9 +291,9 @@ async def test_old_database_migration_preserves_user_data(tmp_path: Path) -> Non
     assert (await repository.list_schedules(ADMIN_TELEGRAM_ID))[0].last_sent_at == (
         "2026-10-10T08:00:00+00:00"
     )
-    assert await repository.was_opportunity_notified(
+    assert not await repository.was_opportunity_notified(
         ADMIN_TELEGRAM_ID, Asset.USDT, QuoteSide.BUY, "offer-a"
-    ) is True
+    )
 
 
 @pytest.mark.asyncio

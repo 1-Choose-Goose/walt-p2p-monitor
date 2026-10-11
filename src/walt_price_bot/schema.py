@@ -4,7 +4,7 @@ import aiosqlite
 
 from .models import SEED_ASSETS
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 LEGACY_TABLES = (
     "settings",
     "alerts",
@@ -149,6 +149,8 @@ CREATE_STATEMENTS = (
         quote_side TEXT NOT NULL CHECK (quote_side IN ('BUY', 'SELL')),
         ad_id TEXT NOT NULL,
         notified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        message_text TEXT NOT NULL DEFAULT '',
+        expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00',
         PRIMARY KEY (telegram_id, asset, quote_side, ad_id)
     )
     """,
@@ -360,7 +362,7 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
         row = await (
             await db.execute("SELECT version FROM schema_meta WHERE singleton = 1")
         ).fetchone()
-        if row is None or int(row[0]) not in {2, 3, CURRENT_SCHEMA_VERSION}:
+        if row is None or int(row[0]) not in {2, 3, 4, CURRENT_SCHEMA_VERSION}:
             raise RuntimeError("unsupported database schema version")
         await db.execute("BEGIN IMMEDIATE")
         try:
@@ -375,6 +377,16 @@ async def migrate_database(db: aiosqlite.Connection, admin_id: int) -> None:
                     "max_buy_premium_percent TEXT NOT NULL DEFAULT '2'"
                 )
                 version = 4
+            if version == 4:
+                await db.execute(
+                    "ALTER TABLE opportunity_notification_history ADD COLUMN "
+                    "message_text TEXT NOT NULL DEFAULT ''"
+                )
+                await db.execute(
+                    "ALTER TABLE opportunity_notification_history ADD COLUMN "
+                    "expires_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00+00:00'"
+                )
+                version = 5
             if version != int(row[0]):
                 await db.execute(
                     "UPDATE schema_meta SET version = ? WHERE singleton = 1",

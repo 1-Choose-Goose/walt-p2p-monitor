@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .access import AccessRequirement
 from .keyboards import ADMIN_BUTTON
-from .messaging import DeleteIncomingMessagesMiddleware
+from .messaging import DeleteIncomingMessagesMiddleware, replace_message
 from .models import AccessStatus, User, UserRole
 from .repository import ADMIN_TELEGRAM_ID, InvalidUserTransitionError, Repository
 
@@ -211,8 +211,11 @@ def build_admin_router(repository: Repository, admin_id: int) -> Router:
             for user in await repository.list_users(limit=20)
             if user.telegram_id != admin_id
         ]
-        await message.answer(
-            format_user_list(users, page=1), reply_markup=_list_keyboard(users, 0)
+        await replace_message(
+            message,
+            repository,
+            format_user_list(users, page=1),
+            reply_markup=_list_keyboard(users, 0),
         )
 
     @router.callback_query(F.data == "menu:admin", flags={"access": AccessRequirement.ADMIN})

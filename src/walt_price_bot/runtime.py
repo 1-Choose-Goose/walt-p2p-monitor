@@ -163,6 +163,7 @@ async def run_monitor_cycle(
     schedule_timezone: ZoneInfo = DEFAULT_TIMEZONE,
 ) -> None:
     telegram_id = telegram_id or await repository.get_owner_id()
+    await repository.prune_opportunity_history(now)
     if await repository.is_paused(telegram_id):
         return
     preferences = await repository.get_preferences(telegram_id)
@@ -264,32 +265,36 @@ async def run_monitor_cycle(
                     ):
                         continue
                     if await repository.was_opportunity_notified(
-                        telegram_id, snapshot.asset, side, offer.id
+                        telegram_id, snapshot.asset, side, offer.id, now
                     ):
                         continue
                     opportunities.append((snapshot, side, offer, spread))
             if opportunities:
                 try:
+                    opportunity_messages = [
+                        _opportunity_message(
+                            snapshot,
+                            side,
+                            offer,
+                            spread,
+                            opportunity_settings.min_spread_percent,
+                            opportunity_settings.max_buy_premium_percent,
+                        )
+                        for snapshot, side, offer, spread in opportunities
+                    ]
                     await sender.send_message(
                         telegram_id,
-                        "\n\n".join(
-                            _opportunity_message(
-                                snapshot,
-                                side,
-                                offer,
-                                spread,
-                                opportunity_settings.min_spread_percent,
-                                opportunity_settings.max_buy_premium_percent,
-                            )
-                            for snapshot, side, offer, spread in opportunities
-                        ),
+                        "\n\n".join(opportunity_messages),
                     )
                     await repository.mark_opportunities_notified(
                         telegram_id,
                         [
-                            (snapshot.asset, side, offer.id)
-                            for snapshot, side, offer, _ in opportunities
-                        ]
+                            (snapshot.asset, side, offer.id, message_text)
+                            for (snapshot, side, offer, _), message_text in zip(
+                                opportunities, opportunity_messages, strict=True
+                            )
+                        ],
+                        now,
                     )
                 except Exception as exc:
                     logger.warning(

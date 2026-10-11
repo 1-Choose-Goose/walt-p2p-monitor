@@ -232,3 +232,14 @@ class OpportunitySettings:
     mode: OpportunityMode
     min_spread_percent: Decimal
     max_buy_premium_percent: Decimal = Decimal("2")
+
+
+@dataclass(frozen=True, slots=True)
+class OpportunityHistoryEntry:
+    id: int
+    asset: Asset
+    quote_side: QuoteSide
+    ad_id: str
+    message_text: str
+    notified_at: datetime
+    expires_at: datetime

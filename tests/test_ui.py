@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from walt_price_bot.models import (
     Asset,
     MarketSnapshot,
+    OpportunityHistoryEntry,
     OpportunityMode,
     OpportunitySettings,
     P2PAd,
@@ -18,6 +20,8 @@ from walt_price_bot.ui import (
     format_opportunity_settings,
     main_menu_keyboard,
     notifications_menu_keyboard,
+    opportunity_history_detail_keyboard,
+    opportunity_history_keyboard,
     opportunity_mode_keyboard,
     opportunity_premium_keyboard,
     opportunity_threshold_keyboard,
@@ -153,6 +157,7 @@ def test_notification_actions_are_grouped_and_markup_is_user_selectable() -> Non
     callbacks = {button.callback_data for button in buttons}
     assert {
         "menu:opportunity",
+        "menu:opportunity-history",
         "menu:alert",
         "menu:change",
         "settings:summary:",
@@ -165,6 +170,35 @@ def test_notification_actions_are_grouped_and_markup_is_user_selectable() -> Non
         for button in row
     ]
     assert "Своя наценка" in threshold_texts
+
+
+def test_opportunity_history_buttons_open_entry_and_return_to_notifications() -> None:
+    created_at = datetime(2026, 10, 11, 3, 31, tzinfo=UTC)
+    entry = OpportunityHistoryEntry(
+        id=17,
+        asset=Asset.USDT,
+        quote_side=QuoteSide.BUY,
+        ad_id="offer-a",
+        message_text="Выгодный лот USDT",
+        notified_at=created_at,
+        expires_at=created_at + timedelta(minutes=10),
+    )
+
+    history_buttons = [
+        button
+        for row in opportunity_history_keyboard([entry]).inline_keyboard
+        for button in row
+    ]
+    detail_buttons = [
+        button
+        for row in opportunity_history_detail_keyboard().inline_keyboard
+        for button in row
+    ]
+
+    assert history_buttons[0].callback_data == "opportunity-history:open:17"
+    assert "Покупка USDT" in history_buttons[0].text
+    assert history_buttons[-1].callback_data == "menu:notifications"
+    assert detail_buttons[0].callback_data == "menu:opportunity-history"
 
 
 def test_asset_keyboard_uses_current_walt_p2p_tickers() -> None:

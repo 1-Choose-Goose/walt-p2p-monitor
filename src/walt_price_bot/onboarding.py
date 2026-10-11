@@ -23,7 +23,7 @@ from .keyboards import (
     phone_request_keyboard,
     remove_reply_keyboard,
 )
-from .messaging import DeleteIncomingMessagesMiddleware, replace_message
+from .messaging import DeleteIncomingMessagesMiddleware, ReplacingSender, replace_message
 from .models import AccessStatus, AssetCatalogEntry
 from .repository import ADMIN_TELEGRAM_ID, Repository
 from .ui import main_menu_keyboard
@@ -140,14 +140,24 @@ async def process_token_message(
         user = await repository.get_user(telegram_id)
         if user is None:
             raise RuntimeError("activated user disappeared from the repository")
-        await message.answer(
+        await replace_message(
+            message,
+            repository,
             "✅ Токен Walt сохранён. Доступ к функциям открыт.",
             reply_markup=main_navigation_keyboard(user.role),
         )
     elif result.status is TokenValidationStatus.INVALID:
-        await message.answer("❌ Токен Walt не принят. Проверьте его и попробуйте снова.")
+        await replace_message(
+            message,
+            repository,
+            "❌ Токен Walt не принят. Проверьте его и попробуйте снова.",
+        )
     else:
-        await message.answer("⚠️ Walt временно недоступен. Токен не изменён, попробуйте позже.")
+        await replace_message(
+            message,
+            repository,
+            "⚠️ Walt временно недоступен. Токен не изменён, попробуйте позже.",
+        )
     return result
 
 
@@ -183,7 +193,9 @@ def build_onboarding_router(
             await state.clear()
         if user and user.status is AccessStatus.ACTIVE:
             if not user.phone:
-                await message.answer(
+                await replace_message(
+                    message,
+                    repository,
                     "Подтвердите номер телефона, чтобы завершить привязку аккаунта.",
                     reply_markup=phone_request_keyboard(),
                 )
@@ -198,13 +210,19 @@ def build_onboarding_router(
             )
             return
         if user and user.status is AccessStatus.PENDING:
-            await message.answer("Заявка уже отправлена и ожидает решения.")
+            await replace_message(
+                message, repository, "Заявка уже отправлена и ожидает решения."
+            )
             return
         if user and user.status is AccessStatus.AWAITING_TOKEN:
             await state.set_state(TokenFlow.token)
-            await message.answer("Отправьте токен Walt одним сообщением.")
+            await replace_message(
+                message, repository, "Отправьте токен Walt одним сообщением."
+            )
             return
-        await message.answer(
+        await replace_message(
+            message,
+            repository,
             "Чтобы отправить заявку, подтвердите номер телефона.",
             reply_markup=phone_request_keyboard(),
         )
@@ -216,16 +234,25 @@ def build_onboarding_router(
                 repository, message.contact, message.from_user
             )
         except ValueError as exc:
-            await message.answer(str(exc), reply_markup=phone_request_keyboard())
+            await replace_message(
+                message,
+                repository,
+                str(exc),
+                reply_markup=phone_request_keyboard(),
+            )
             return
         account = await repository.get_user(message.from_user.id)
         if account and account.status is AccessStatus.ACTIVE:
-            await message.answer(
+            await replace_message(
+                message,
+                repository,
                 "✅ Номер подтверждён и привязан к аккаунту.",
                 reply_markup=main_navigation_keyboard(account.role),
             )
         else:
-            await message.answer(
+            await replace_message(
+                message,
+                repository,
                 "✅ Номер подтверждён. Заявка отправлена администратору.",
                 reply_markup=remove_reply_keyboard(),
             )
@@ -235,10 +262,9 @@ def build_onboarding_router(
                 if message.from_user.username
                 else "без username"
             )
-            await message.bot.send_message(
-                admin_id,
-                f"Новая заявка: {message.from_user.full_name} "
-                f"({username}), ID {message.from_user.id}.",
+            await ReplacingSender(
+                message.bot,
+                repository,
                 reply_markup=InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
@@ -249,6 +275,10 @@ def build_onboarding_router(
                         ]
                     ]
                 ),
+            ).send_message(
+                admin_id,
+                f"Новая заявка: {message.from_user.full_name} "
+                f"({username}), ID {message.from_user.id}.",
             )
 
     @router.callback_query(
@@ -261,7 +291,7 @@ def build_onboarding_router(
             return
         target_id = int(callback.data.rsplit(":", 1)[1])
         await approve_access(repository, target_id)
-        await callback.bot.send_message(
+        await ReplacingSender(callback.bot, repository).send_message(
             target_id, "✅ Доступ одобрен. Теперь отправьте токен Walt командой /token."
         )
         await callback.answer("Доступ одобрен")
@@ -273,10 +303,16 @@ def build_onboarding_router(
             AccessStatus.AWAITING_TOKEN,
             AccessStatus.ACTIVE,
         }:
-            await message.answer("Сначала получите доступ у администратора.")
+            await replace_message(
+                message, repository, "Сначала получите доступ у администратора."
+            )
             return
         await state.set_state(TokenFlow.token)
-        await message.answer("Отправьте токен Walt одним сообщением. Сообщение будет удалено.")
+        await replace_message(
+            message,
+            repository,
+            "Отправьте токен Walt одним сообщением. Сообщение будет удалено.",
+        )
 
     @router.message(TokenFlow.token, F.text, flags={"access": AccessRequirement.PUBLIC})
     async def receive_token(message: Message, state: FSMContext) -> None:

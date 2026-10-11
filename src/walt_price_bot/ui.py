@@ -1,6 +1,7 @@
 import base64
 from decimal import Decimal, InvalidOperation
 from html import escape
+from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -10,6 +11,7 @@ from .models import (
     AlertRule,
     Asset,
     MarketSnapshot,
+    OpportunityHistoryEntry,
     OpportunityMode,
     OpportunitySettings,
     P2PAd,
@@ -20,6 +22,7 @@ from .models import (
 )
 
 WALT_MINI_APP_URL = "https://telegram.me/walt/start?startapp="
+DEFAULT_HISTORY_TIMEZONE = ZoneInfo("Asia/Yekaterinburg")
 PAYMENT_NAMES = {
     "akbarsbank": "Ак Барс Банк",
     "alfabank": "Альфа-Банк",
@@ -218,6 +221,12 @@ def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="💎 Выгодные лоты", callback_data="menu:opportunity")],
             [
+                InlineKeyboardButton(
+                    text="🕘 История выгодных лотов",
+                    callback_data="menu:opportunity-history",
+                )
+            ],
+            [
                 InlineKeyboardButton(text="🎯 Ценовой порог", callback_data="menu:alert"),
                 InlineKeyboardButton(text="📈 Изменение цены", callback_data="menu:change"),
             ],
@@ -238,6 +247,43 @@ def notifications_menu_keyboard(paused: bool) -> InlineKeyboardMarkup:
                 )
             ],
             _back_row(),
+        ]
+    )
+
+
+def opportunity_history_keyboard(
+    entries: list[OpportunityHistoryEntry],
+    timezone: ZoneInfo = DEFAULT_HISTORY_TIMEZONE,
+) -> InlineKeyboardMarkup:
+    rows = []
+    for entry in entries:
+        action = "Покупка" if entry.quote_side is QuoteSide.BUY else "Продажа"
+        icon = "🟢" if entry.quote_side is QuoteSide.BUY else "🔵"
+        local_time = entry.notified_at.astimezone(timezone).strftime("%H:%M")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{icon} {action} {entry.asset.value} · {local_time}",
+                    callback_data=f"opportunity-history:open:{entry.id}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="Назад", callback_data="menu:notifications")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def opportunity_history_detail_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ К истории",
+                    callback_data="menu:opportunity-history",
+                )
+            ],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:home")],
         ]
     )
 

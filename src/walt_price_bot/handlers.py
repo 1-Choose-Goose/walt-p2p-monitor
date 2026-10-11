@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -37,6 +38,8 @@ from .ui import (
     format_rules,
     main_menu_keyboard,
     notifications_menu_keyboard,
+    opportunity_history_detail_keyboard,
+    opportunity_history_keyboard,
     opportunity_mode_keyboard,
     opportunity_premium_keyboard,
     opportunity_threshold_keyboard,
@@ -540,6 +543,51 @@ def build_router(repository: Repository, market_provider: MarketProvider) -> Rou
                 format_opportunity_settings(settings),
                 opportunity_mode_keyboard(settings),
             )
+
+    @router.callback_query(F.data == "menu:opportunity-history")
+    async def menu_opportunity_history(callback: CallbackQuery) -> None:
+        if not await owner_required(callback, repository):
+            return
+        entries = await repository.list_opportunity_history(callback.from_user.id)
+        preferences = await repository.get_preferences(callback.from_user.id)
+        text = (
+            "🕘 <b>История выгодных лотов</b>\n\n"
+            "Здесь хранятся предложения за последние 10 минут."
+            if entries
+            else "🕘 <b>История выгодных лотов</b>\n\nЗа последние 10 минут предложений нет."
+        )
+        await update_callback(
+            callback,
+            text,
+            opportunity_history_keyboard(entries, ZoneInfo(preferences.timezone)),
+        )
+
+    @router.callback_query(F.data.startswith("opportunity-history:open:"))
+    async def opportunity_history_open(callback: CallbackQuery) -> None:
+        if not await owner_required(callback, repository):
+            return
+        try:
+            entry_id = int(callback.data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("Предложение уже недоступно.", show_alert=True)
+            return
+        entry = await repository.get_opportunity_history_entry(
+            callback.from_user.id, entry_id
+        )
+        if entry is None:
+            entries = await repository.list_opportunity_history(callback.from_user.id)
+            preferences = await repository.get_preferences(callback.from_user.id)
+            await update_callback(
+                callback,
+                "⌛ Предложение уже удалено: прошло больше 10 минут.",
+                opportunity_history_keyboard(entries, ZoneInfo(preferences.timezone)),
+            )
+            return
+        await update_callback(
+            callback,
+            entry.message_text,
+            opportunity_history_detail_keyboard(),
+        )
 
     @router.callback_query(
         OpportunityFlow.mode, F.data.startswith("opportunity:mode:")

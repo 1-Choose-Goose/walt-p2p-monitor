@@ -1,10 +1,13 @@
+import ast
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.types import ReplyKeyboardMarkup
 
+import walt_price_bot.main as bot_main
 from walt_price_bot.main import default_bot_properties
 from walt_price_bot.messaging import (
     DeleteIncomingMessagesMiddleware,
@@ -12,6 +15,26 @@ from walt_price_bot.messaging import (
     replace_message,
 )
 from walt_price_bot.repository import ADMIN_TELEGRAM_ID, Repository
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ["onboarding.py", "preferences.py", "admin.py"],
+)
+def test_user_responses_use_single_message_replacement(module_name: str) -> None:
+    source_path = Path(__file__).parents[1] / "src" / "walt_price_bot" / module_name
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    direct_answers = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "answer"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "message"
+    ]
+
+    assert direct_answers == []
 
 
 @pytest.mark.asyncio
@@ -29,6 +52,26 @@ def test_telegram_link_previews_are_disabled() -> None:
     properties = default_bot_properties()
 
     assert properties.link_preview_is_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_background_notifications_restore_persistent_main_menu(
+    tmp_path: Path,
+) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=31)),
+    )
+    factory = getattr(bot_main, "build_message_sender", None)
+
+    assert callable(factory)
+    await factory(bot, repository).send_message(ADMIN_TELEGRAM_ID, "Выгодный лот")
+
+    markup = bot.send_message.await_args.kwargs["reply_markup"]
+    assert isinstance(markup, ReplyKeyboardMarkup)
+    assert markup.is_persistent is True
 
 
 @pytest.mark.asyncio
