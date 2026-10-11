@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.types import ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup
 
 import walt_price_bot.main as bot_main
 from walt_price_bot.main import default_bot_properties
@@ -55,13 +55,15 @@ def test_telegram_link_previews_are_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_notifications_restore_persistent_main_menu(
+async def test_background_notifications_replace_summary_and_keep_main_menu(
     tmp_path: Path,
 ) -> None:
     repository = Repository(tmp_path / "bot.db")
     await repository.initialize()
+    await repository.set_last_message_id(ADMIN_TELEGRAM_ID, 30)
     bot = SimpleNamespace(
         delete_message=AsyncMock(),
+        edit_message_text=AsyncMock(return_value=SimpleNamespace(message_id=30)),
         send_message=AsyncMock(return_value=SimpleNamespace(message_id=31)),
     )
     factory = getattr(bot_main, "build_message_sender", None)
@@ -69,9 +71,13 @@ async def test_background_notifications_restore_persistent_main_menu(
     assert callable(factory)
     await factory(bot, repository).send_message(ADMIN_TELEGRAM_ID, "Выгодный лот")
 
-    markup = bot.send_message.await_args.kwargs["reply_markup"]
-    assert isinstance(markup, ReplyKeyboardMarkup)
-    assert markup.is_persistent is True
+    bot.edit_message_text.assert_awaited_once()
+    bot.delete_message.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+    markup = bot.edit_message_text.await_args.kwargs["reply_markup"]
+    assert isinstance(markup, InlineKeyboardMarkup)
+    assert any(button.text == "👥 Пользователи" for row in markup.inline_keyboard for button in row)
+    assert await repository.get_last_message_id(ADMIN_TELEGRAM_ID) == 30
 
 
 @pytest.mark.asyncio
@@ -171,9 +177,7 @@ async def test_interactive_and_background_replacements_share_lock(tmp_path: Path
 
     await asyncio.gather(
         replace_message(message, repository, "Кнопка"),
-        ReplacingSender(bot, repository).send_message(
-            ADMIN_TELEGRAM_ID, "Уведомление"
-        ),
+        ReplacingSender(bot, repository).send_message(ADMIN_TELEGRAM_ID, "Уведомление"),
     )
 
     assert deleted == [10, 11]

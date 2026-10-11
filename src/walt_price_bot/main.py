@@ -17,13 +17,13 @@ from .credentials import CredentialCipher
 from .exchange import CoinbaseRatesClient
 from .fsm_storage import SQLiteFSMStorage
 from .handlers import build_router
-from .keyboards import main_navigation_keyboard
 from .messaging import ReplacingSender
 from .models import SEED_ASSETS
 from .monitoring import UserMarketProviderFactory, monitor_multi_user_forever
 from .onboarding import build_onboarding_router, migrate_legacy_admin_token
 from .preferences import build_preferences_router
 from .repository import ADMIN_TELEGRAM_ID, Repository
+from .ui import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,15 @@ def default_bot_properties() -> DefaultBotProperties:
 
 
 def build_message_sender(bot: Any, repository: Repository) -> ReplacingSender:
+    async def notification_menu(chat_id: int) -> Any:
+        user = await repository.get_user(chat_id)
+        return main_menu_keyboard(user.role) if user is not None else main_menu_keyboard()
+
     return ReplacingSender(
         bot,
         repository,
-        reply_markup=main_navigation_keyboard(),
+        reply_markup_factory=notification_menu,
+        edit_existing=True,
     )
 
 
