@@ -25,6 +25,7 @@ class SettingsAction(StrEnum):
     ASSET = "asset"
     ALL_ASSETS = "all_assets"
     LIMIT = "limit"
+    LIMIT_NO_MAX = "limit_no_max"
     AMOUNT = "amount"
     DIRECTIONS = "directions"
     DIRECTION = "direction"
@@ -58,6 +59,7 @@ class SettingsCallback(CallbackData, prefix="settings"):
 
 class PreferencesFlow(StatesGroup):
     custom_limit = State()
+    custom_limit_upper = State()
     desired_amount = State()
     quiet_custom = State()
 
@@ -319,6 +321,27 @@ def limit_settings_keyboard() -> InlineKeyboardMarkup:
             ("Сумма сделки: 5 000 ₽", SettingsAction.AMOUNT, "5000"),
             ("Сумма сделки: 25 000 ₽", SettingsAction.AMOUNT, "25000"),
             ("Не учитывать сумму сделки", SettingsAction.AMOUNT, "none"),
+        ]
+    )
+
+
+def custom_limit_upper_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="♾ Без верхнего ограничения",
+                    callback_data=SettingsCallback(
+                        action=SettingsAction.LIMIT_NO_MAX
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=SettingsCallback(action=SettingsAction.LIMIT).pack(),
+                )
+            ],
         ]
     )
 
@@ -784,18 +807,33 @@ def build_preferences_router(repository: Repository) -> Router:
         elif action is SettingsAction.HOME:
             await return_to_main_menu(callback, state, repository)
         elif action is SettingsAction.LIMIT and not callback_data.value and callback.message:
+            await state.clear()
             await callback.message.edit_text(
                 "💵 <b>Допустимый минимальный лимит объявления</b>",
                 reply_markup=limit_settings_keyboard(),
             )
             await callback.answer()
         elif action is SettingsAction.LIMIT and callback_data.value == "custom":
+            await state.clear()
             await state.set_state(PreferencesFlow.custom_limit)
             await callback.answer()
             if callback.message:
                 await callback.message.edit_text(
                     "Введите нижнюю границу минимального лимита в рублях."
                 )
+        elif action is SettingsAction.LIMIT_NO_MAX:
+            data = await state.get_data()
+            lower_value = data.get("custom_limit_from")
+            if lower_value is None:
+                await reject_stale_setting(callback)
+                return
+            await repository.update_preferences(
+                telegram_id,
+                min_limit_from=Decimal(str(lower_value)),
+                min_limit_to=None,
+            )
+            await state.clear()
+            await show_settings(callback)
         elif action is SettingsAction.LIMIT:
             try:
                 lower, upper = callback_data.value.split("-", 1)
@@ -829,20 +867,59 @@ def build_preferences_router(repository: Repository) -> Router:
     async def custom_limit(message: Message, state: FSMContext) -> None:
         try:
             value = parse_money(message.text or "")
-            await repository.update_preferences(
-                message.from_user.id, min_limit_from=value
-            )
         except ValueError as exc:
             await replace_message(message, repository, str(exc))
+            return
+        await state.update_data(custom_limit_from=str(value))
+        await state.set_state(PreferencesFlow.custom_limit_upper)
+        await replace_message(
+            message,
+            repository,
+            f"Нижняя граница: {_money(value)}.\n"
+            "Теперь введите верхнюю границу или выберите «Без ограничения».",
+            reply_markup=custom_limit_upper_keyboard(),
+        )
+
+    @router.message(PreferencesFlow.custom_limit_upper)
+    async def custom_limit_upper(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        lower_value = data.get("custom_limit_from")
+        if lower_value is None:
+            await state.clear()
+            await replace_message(
+                message,
+                repository,
+                "Ввод лимита прерван. Откройте «Лимиты и сумма» ещё раз.",
+            )
+            return
+        lower = Decimal(str(lower_value))
+        try:
+            upper = parse_money(message.text or "")
+            if upper < lower:
+                raise ValueError("Верхняя граница не может быть меньше нижней.")
+            await repository.update_preferences(
+                message.from_user.id,
+                min_limit_from=lower,
+                min_limit_to=upper,
+            )
+        except ValueError as exc:
+            await replace_message(
+                message,
+                repository,
+                f"{exc}\nВведите верхнюю границу ещё раз.",
+                reply_markup=custom_limit_upper_keyboard(),
+            )
             return
         await state.clear()
         account = await repository.get_user(message.from_user.id)
         if account is None:
             raise ValueError("unknown user")
+        lower_text = f"{lower:,.0f}".replace(",", " ")
+        upper_text = f"{upper:,.0f}".replace(",", " ")
         await replace_message(
             message,
             repository,
-            "✅ Лимит сохранён.",
+            f"✅ Лимит {lower_text}–{upper_text} ₽ сохранён.",
             reply_markup=main_menu_keyboard(
                 account.role,
                 await repository.is_paused(message.from_user.id),

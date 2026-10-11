@@ -7,6 +7,7 @@ import pytest
 
 from walt_price_bot.models import BTC, ETH, QuoteSide
 from walt_price_bot.preferences import (
+    PreferencesFlow,
     SettingsAction,
     SettingsCallback,
     build_preferences_router,
@@ -98,7 +99,7 @@ async def test_lower_limit_cannot_exceed_saved_upper_limit(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_custom_limit_saves_and_confirms_without_deleting_input_twice(
+async def test_custom_limit_asks_for_upper_bound_before_saving(
     tmp_path: Path,
 ) -> None:
     repository = Repository(tmp_path / "bot.db")
@@ -110,23 +111,96 @@ async def test_custom_limit_saves_and_confirms_without_deleting_input_twice(
         if entry.callback.__name__ == "custom_limit"
     )
     message = SimpleNamespace(
-        text="1 500",
+        text="5 000",
         from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
         bot=SimpleNamespace(delete_message=AsyncMock()),
         answer=AsyncMock(return_value=SimpleNamespace(message_id=51)),
         delete=AsyncMock(),
     )
-    state = SimpleNamespace(clear=AsyncMock())
+    state = SimpleNamespace(
+        clear=AsyncMock(),
+        set_state=AsyncMock(),
+        update_data=AsyncMock(),
+    )
 
     await handler(message, state)
 
     preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
-    assert preferences.min_limit_from == Decimal("1500")
-    state.clear.assert_awaited_once()
+    assert preferences.min_limit_from == Decimal("500")
+    assert preferences.min_limit_to == Decimal("2000")
+    state.update_data.assert_awaited_once_with(custom_limit_from="5000")
+    state.set_state.assert_awaited_once_with(PreferencesFlow.custom_limit_upper)
+    state.clear.assert_not_awaited()
     message.answer.assert_awaited_once()
-    assert message.answer.await_args.args[0] == "✅ Лимит сохранён."
+    assert "верхнюю границу" in message.answer.await_args.args[0]
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    unlimited = SettingsCallback.unpack(markup.inline_keyboard[0][0].callback_data)
+    assert unlimited.action is SettingsAction.LIMIT_NO_MAX
     message.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_custom_upper_limit_saves_both_new_bounds(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    router = build_preferences_router(repository)
+    handler = next(
+        entry.callback
+        for entry in router.message.handlers
+        if entry.callback.__name__ == "custom_limit_upper"
+    )
+    message = SimpleNamespace(
+        text="10 000",
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        chat=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        bot=SimpleNamespace(delete_message=AsyncMock()),
+        answer=AsyncMock(return_value=SimpleNamespace(message_id=52)),
+    )
+    state = SimpleNamespace(
+        clear=AsyncMock(),
+        get_data=AsyncMock(return_value={"custom_limit_from": "5000"}),
+    )
+
+    await handler(message, state)
+
+    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    assert preferences.min_limit_from == Decimal("5000")
+    assert preferences.min_limit_to == Decimal("10000")
+    state.clear.assert_awaited_once()
+    assert message.answer.await_args.args[0] == "✅ Лимит 5 000–10 000 ₽ сохранён."
+
+
+@pytest.mark.asyncio
+async def test_custom_limit_can_have_no_upper_bound(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "bot.db")
+    await repository.initialize()
+    router = build_preferences_router(repository)
+    handler = next(
+        entry.callback
+        for entry in router.callback_query.handlers
+        if entry.callback.__name__ == "setting_action"
+    )
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=ADMIN_TELEGRAM_ID),
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(
+        clear=AsyncMock(),
+        get_data=AsyncMock(return_value={"custom_limit_from": "5000"}),
+    )
+
+    await handler(
+        callback,
+        SettingsCallback(action=SettingsAction.LIMIT_NO_MAX),
+        state,
+    )
+
+    preferences = await repository.get_preferences(ADMIN_TELEGRAM_ID)
+    assert preferences.min_limit_from == Decimal("5000")
+    assert preferences.min_limit_to is None
+    state.clear.assert_awaited_once()
 
 
 @pytest.mark.asyncio
