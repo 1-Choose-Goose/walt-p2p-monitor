@@ -136,6 +136,9 @@ def _list_keyboard(
         )
     if navigation:
         rows.append(navigation)
+    rows.append(
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="menu:home")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

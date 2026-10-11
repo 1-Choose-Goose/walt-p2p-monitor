@@ -218,3 +218,11 @@ async def test_admin_card_keeps_second_page_navigation(tmp_path: Path) -> None:
     assert updated.status is AccessStatus.AWAITING_TOKEN
     stored = await repository.get_user(open_callback.target_id)
     assert stored.status is AccessStatus.AWAITING_TOKEN
+
+
+def test_empty_admin_list_keeps_main_menu_navigation() -> None:
+    keyboard = _list_keyboard([], page=0)
+
+    home = keyboard.inline_keyboard[-1][0]
+    assert home.text == "🏠 Главное меню"
+    assert home.callback_data == "menu:home"
